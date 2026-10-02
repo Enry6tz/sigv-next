@@ -2,6 +2,18 @@
 
 Sistema Integral de Gestión de Vuelos y Venta de Pasajes. La aplicación usa Next.js 16, App Router, TypeScript, Supabase Auth y el SDK de Supabase. No usa Prisma. La identidad visual sigue los wireframes de SIGV. El esquema Prisma recibido se conserva en docs solo como referencia histórica.
 
+## Versiones desplegadas
+
+| Sprint | Rama | APP_SPRINT | URL |
+| --- | --- | --- | --- |
+| Sprint 1 | `sprint-1` | `1` | [Abrir Sprint 1](https://sigv-next-hgl8-git-sprint-1-enry6tzs-projects.vercel.app) |
+| Sprint 2 | `sprint-2` | `2` | [Abrir Sprint 2](https://sigv-next-hgl8-git-sprint-2-enry6tzs-projects.vercel.app) |
+| Sprint 3 | `main` | `3` | [Abrir Sprint 3](https://sigv-next-hgl8.vercel.app) |
+
+Las tres ramas comparten el código completo y se despliegan en el proyecto Vercel `sigv-next-hgl8`. `APP_SPRINT` se configura en Vercel con un valor específico para cada rama; determina el cartel visible y habilita los menús, pantallas y recursos de ese sprint. Las mejoras de código deben sincronizarse en las tres ramas para mantenerlas iguales.
+
+Sprint 1 y Sprint 2 usan URLs estables de rama de Preview, que apuntan al último despliegue de su rama. Vercel puede solicitar iniciar sesión para acceder a esos previews. Sprint 3 usa la URL de producción. Todas las versiones usan `DATA_PROVIDER=supabase` y las variables de conexión de Supabase en su entorno. Los retornos de confirmación de correo requieren permitir el callback de cada entorno en Supabase Auth.
+
 ## Puesta en marcha
 
 1. Ejecutar npm ci.
