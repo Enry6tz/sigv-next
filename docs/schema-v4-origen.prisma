@@ -1,0 +1,340 @@
+// ============================================================================
+//  Sistema SIMARI (Aerolínea) — Esquema Prisma v4
+//  Cambio v4: la entidad Clase se elimina y pasa a ser el enum Clase
+//  (ECONOMY, PRIMERA). La entidad CheckIn se elimina y sus datos de
+//  check-in se incorporan en Pasaje. numeroAsiento pasa a llamarse
+//  codigoAsiento. Factura deja de almacenar cuitCliente y urlPdf.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+//  Enumeraciones
+// ---------------------------------------------------------------------------
+
+enum Rol {
+  ADMIN
+  PASAJERO
+  MOSTRADOR
+}
+
+enum EstadoUsuario {
+  ACTIVO
+  INACTIVO
+}
+
+enum EstadoVuelo {
+  ACTIVO
+  CANCELADO
+  RETRASADO
+}
+
+enum EstadoProgramacionVuelo {
+  ACTIVA
+  SUSPENDIDA
+}
+
+enum DiaSemana {
+  LUN
+  MAR
+  MIE
+  JUE
+  VIE
+  SAB
+  DOM
+}
+
+enum Clase {
+  ECONOMY
+  PRIMERA
+}
+
+enum EstadoAvion {
+  ACTIVA
+  MANTENIMIENTO
+  FUERA_SERVICIO
+}
+
+enum EstadoReserva {
+  PENDIENTE
+  CONFIRMADA
+  CANCELADA
+}
+
+enum EstadoPasaje {
+  VIGENTE
+  USADO
+  CANCELADO
+}
+
+enum EstadoAsiento {
+  DISPONIBLE
+  OCUPADO
+  BLOQUEADO
+}
+
+enum EstadoPago {
+  PENDIENTE
+  APROBADO
+  RECHAZADO
+}
+
+enum MetodoPago {
+  TARJETA
+  TRANSFERENCIA
+  EFECTIVO
+}
+
+enum EstadoCheckIn {
+  COMPLETADO
+  CANCELADO
+}
+
+enum TipoNotificacion {
+  CAMBIO_HORARIO
+  CANCELACION
+  CONFIRMACION_COMPRA
+}
+
+enum EstadoNotificacion {
+  PENDIENTE
+  ENVIADA
+  ERROR
+}
+
+// ---------------------------------------------------------------------------
+//  Modelos
+// ---------------------------------------------------------------------------
+
+model Usuario {
+  id             Int              @id @default(autoincrement())
+  email          String           @unique
+  passwordHash   String
+  nombre         String
+  apellido       String
+  dni            String           @unique
+  telefono       String?
+  rol            Rol
+  estado         EstadoUsuario    @default(ACTIVO)
+  fechaRegistro  DateTime         @default(now())
+
+  reservas       Reserva[]
+  pasajes        Pasaje[]
+  notificaciones Notificacion[]
+  logsCambio     LogCambioVuelo[]
+
+  @@map("usuarios")
+}
+
+model Aeropuerto {
+  codigoIata    String   @id
+  nombre        String
+  ciudad        String
+  pais          String
+
+  programacionesOrigen  ProgramacionVuelo[] @relation("ProgramacionOrigen")
+  programacionesDestino ProgramacionVuelo[] @relation("ProgramacionDestino")
+
+  @@map("aeropuertos")
+}
+
+model Avion {
+  id               Int          @id @default(autoincrement())
+  modelo           String
+  matricula        String       @unique
+  capacidadEconomy Int
+  capacidadPrimera Int
+  estado           EstadoAvion  @default(ACTIVA)
+
+  programaciones   ProgramacionVuelo[]
+
+  @@map("aviones")
+}
+
+model ProgramacionVuelo {
+  id                  Int                      @id @default(autoincrement())
+  codigoVuelo         String                   @unique
+  aeropuertoOrigenId  String
+  aeropuertoDestinoId String
+  avionId             Int
+  horarioSalida       DateTime                 @db.Time
+  horarioLlegada      DateTime                 @db.Time
+  periodoVentaInicio  DateTime                 @db.Date
+  periodoVentaFin     DateTime                 @db.Date
+  estado              EstadoProgramacionVuelo  @default(ACTIVA)
+  fechaCreacion       DateTime                 @default(now())
+  fechaModificacion   DateTime                 @updatedAt
+
+  aeropuertoOrigen    Aeropuerto               @relation("ProgramacionOrigen", fields: [aeropuertoOrigenId], references: [codigoIata])
+  aeropuertoDestino   Aeropuerto               @relation("ProgramacionDestino", fields: [aeropuertoDestinoId], references: [codigoIata])
+  avion               Avion                    @relation(fields: [avionId], references: [id], onDelete: Restrict)
+  frecuencias         FrecuenciaVuelo[]
+  configuraciones     ConfiguracionProgramacionVuelos[]
+  vuelos              Vuelo[]
+
+  @@map("programaciones_vuelo")
+}
+
+model Vuelo {
+  id                   Int             @id @default(autoincrement())
+  programacionId       Int
+  fecha                DateTime        @db.Date
+  horaSalidaEstimada   DateTime?       @db.Time
+  estado               EstadoVuelo     @default(ACTIVO)
+  fechaCreacion        DateTime        @default(now())
+  fechaModificacion    DateTime        @updatedAt
+
+  programacion         ProgramacionVuelo @relation(fields: [programacionId], references: [id], onDelete: Cascade)
+  asientos             Asiento[]
+  pasajes              Pasaje[]
+  notificaciones       Notificacion[]
+  logsCambio           LogCambioVuelo[]
+
+  @@unique([programacionId, fecha])
+  @@map("vuelos")
+}
+
+model FrecuenciaVuelo {
+  id           Int                @id @default(autoincrement())
+  programacionId Int
+  diaSemana    DiaSemana
+
+  programacion ProgramacionVuelo  @relation(fields: [programacionId], references: [id], onDelete: Cascade)
+
+  @@unique([programacionId, diaSemana])
+  @@map("frecuencias_vuelo")
+}
+
+model ConfiguracionProgramacionVuelos {
+  id             Int                @id @default(autoincrement())
+  programacionId Int
+  clase          Clase
+  capacidadTotal Int
+  precioBase     Decimal            @db.Decimal(12, 2)
+
+  programacion   ProgramacionVuelo  @relation(fields: [programacionId], references: [id], onDelete: Cascade)
+
+  @@unique([programacionId, clase])
+  @@map("configuraciones_programacion_vuelo")
+}
+
+model Reserva {
+  id            Int            @id @default(autoincrement())
+  codigoReserva String         @unique
+  usuarioId     Int
+  fechaCompra   DateTime       @default(now())
+  montoTotal    Decimal        @db.Decimal(12, 2)
+  estado        EstadoReserva  @default(PENDIENTE)
+
+  usuario       Usuario        @relation(fields: [usuarioId], references: [id])
+  pasajes       Pasaje[]
+  pago          Pago?
+
+  @@map("reservas")
+}
+
+model Pasaje {
+  id                  Int             @id @default(autoincrement())
+  reservaId           Int
+  vueloId             Int
+  clase               Clase
+  usuarioId           Int?
+  nombrePasajero      String
+  apellidoPasajero    String
+  dniPasajero         String
+  emailPasajero       String?
+  estado              EstadoPasaje    @default(VIGENTE)
+  asientoId           Int?            @unique
+  fechaCheckIn        DateTime?
+  boardingPassCodigo  String?         @unique
+  estadoCheckIn       EstadoCheckIn?
+  createdAt           DateTime        @default(now())
+
+  reserva             Reserva         @relation(fields: [reservaId], references: [id], onDelete: Cascade)
+  vuelo               Vuelo           @relation(fields: [vueloId], references: [id])
+  usuario             Usuario?        @relation(fields: [usuarioId], references: [id])
+  asiento             Asiento?        @relation(fields: [asientoId], references: [id])
+
+  @@map("pasajes")
+}
+
+model Asiento {
+  id            Int           @id @default(autoincrement())
+  vueloId       Int
+  clase         Clase
+  codigoAsiento String
+  fila          Int
+  columna       String
+  estado        EstadoAsiento @default(DISPONIBLE)
+
+  vuelo         Vuelo         @relation(fields: [vueloId], references: [id], onDelete: Cascade)
+  pasaje        Pasaje?
+
+  @@unique([vueloId, codigoAsiento])
+  @@map("asientos")
+}
+
+model Pago {
+  id            Int         @id @default(autoincrement())
+  reservaId     Int         @unique
+  monto         Decimal     @db.Decimal(12, 2)
+  fechaPago     DateTime    @default(now())
+  estado        EstadoPago  @default(PENDIENTE)
+  metodoPago    MetodoPago
+  ultimos4      String?
+
+  reserva       Reserva     @relation(fields: [reservaId], references: [id], onDelete: Cascade)
+  factura       Factura?
+
+  @@map("pagos")
+}
+
+model Factura {
+  id            Int      @id @default(autoincrement())
+  numeroFactura String   @unique
+  pagoId        Int      @unique
+  fechaEmision  DateTime @default(now())
+  montoTotal    Decimal  @db.Decimal(12, 2)
+
+  pago          Pago     @relation(fields: [pagoId], references: [id], onDelete: Cascade)
+
+  @@map("facturas")
+}
+
+model Notificacion {
+  id         Int                 @id @default(autoincrement())
+  usuarioId  Int
+  vueloId    Int?
+  tipo       TipoNotificacion
+  asunto     String
+  mensaje    String
+  fechaEnvio DateTime            @default(now())
+  estado     EstadoNotificacion  @default(PENDIENTE)
+
+  usuario    Usuario             @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  vuelo      Vuelo?              @relation(fields: [vueloId], references: [id])
+
+  @@map("notificaciones")
+}
+
+model LogCambioVuelo {
+  id                 Int      @id @default(autoincrement())
+  vueloId            Int
+  usuarioAdminId     Int
+  campoModificado    String
+  valorAnterior      String?
+  valorNuevo         String?
+  fechaModificacion  DateTime @default(now())
+
+  vuelo              Vuelo    @relation(fields: [vueloId], references: [id], onDelete: Cascade)
+  usuarioAdmin       Usuario  @relation(fields: [usuarioAdminId], references: [id])
+
+  @@map("log_cambios_vuelo")
+}

@@ -1,36 +1,35 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SIGV · Next.js y Supabase
 
-## Getting Started
+Sistema Integral de Gestión de Vuelos y Venta de Pasajes. La aplicación usa Next.js 16, App Router, TypeScript, Supabase Auth y el SDK de Supabase. No usa Prisma. La identidad visual sigue los wireframes de SIGV. El esquema Prisma recibido se conserva en docs solo como referencia histórica.
 
-First, run the development server:
+## Puesta en marcha
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. Ejecutar npm ci.
+2. Copiar .env.sprint3.example a .env.sprint3.local y completar NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Mantener DATA_PROVIDER=supabase y APP_SPRINT=3.
+3. Aplicar en orden los archivos de supabase/migrations/ en el SQL Editor. El proyecto SIGV de pruebas ya los tiene aplicados hasta 20261001_notification_dedupe.sql.
+4. En Supabase Auth, habilitar registro por email, exigir confirmación y permitir la URL de retorno del entorno, por ejemplo http://localhost:3001/auth/callback.
+5. Ejecutar npm run dev:s3, o npm run build:s3 seguido de npm run start:s3 para producción local en el puerto 3001.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Los perfiles S1 y S2 usan npm run dev:s1 y npm run dev:s2. Cada .env.sprintN.local define APP_SPRINT y DATA_PROVIDER. Cambiar de perfil requiere reiniciar el servidor y, en producción, recompilar. La contraseña de base y las claves privadas nunca van al cliente.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Acceso y roles
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+El registro de pasajeros es público. El formulario pide nombre, apellido, documento, email y contraseña; teléfono es opcional. Supabase Auth confirma el correo. El trigger de alta crea el perfil y asigna siempre pasajero; el cliente no puede elegir un rol superior. Solo un administrador puede asignar mostrador o admin. Las rutas y operaciones protegidas verifican sesión, rol y políticas RLS. La entrega real del correo depende de la configuración del proyecto Supabase.
 
-## Learn More
+## Módulos
 
-To learn more about Next.js, take a look at the following resources:
+| Perfil | Módulos visibles |
+| --- | --- |
+| S1 | Acceso y perfil, búsqueda, vuelos, aeropuertos, aviones, programaciones, frecuencias, configuraciones por clase, cupos, tarifas y usuarios. |
+| S2 | S1 + reserva, pago de prueba, comprobantes, contingencias, manifiesto, check-in, boarding pass y asientos. |
+| S3 | S2 + notificaciones, tickets digitales, reportes y auditoría. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+src/lib/catalog.ts define el sprint mínimo de cada pantalla y recurso. El servidor oculta menús futuros, devuelve 404 en rutas futuras y SPRINT_DISABLED en APIs futuras. El proveedor mock permite revisar la interfaz sin Supabase; sus escrituras no persisten. El proveedor supabase usa datos reales, RLS y funciones RPC. /api/data/{resource} es la ruta principal; /api/mock/{resource} es un alias compatible.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Datos y límites
 
-## Deploy on Vercel
+Las migraciones incluyen aeropuertos, aviones, programaciones y frecuencias, configuración por clase, vuelos y asientos, perfiles y roles, reservas y pasajeros, pagos e invoices de prueba, avisos y auditoría. Reserva, cupos, pago de prueba, check-in, cancelación y generación de vuelos realizan las operaciones sensibles dentro de PostgreSQL.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+El pago es intencionalmente simulado: confirma la reserva y crea un comprobante de prueba, sin cargo real. Los avisos se guardan en la aplicación; falta correo comercial saliente. Los tickets pueden descargarse como copia autónoma para abrir sin conexión, pero esa copia no se sincroniza automáticamente; tampoco hay app móvil nativa. Ver docs/COBERTURA.md, docs/ENDPOINTS.md y docs/VALIDACION.md antes de usar esta base en producción.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Fuentes: ../User stories.docx, ../Requerimientos de alto nivel.docx, ../wireframes/ y ../modelo de datos/. La guía Recomendaciones-Nextjs-Supabase-Prisma corresponde a otro producto y se usó solo para criterios de estructura; la especificación funcional es SIGV.

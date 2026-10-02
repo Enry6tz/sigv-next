@@ -4,19 +4,34 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:s1": "dotenv -e .env.sprint1.local -o -- next dev",
+    "dev:s2": "dotenv -e .env.sprint2.local -o -- next dev",
+    "dev:s3": "dotenv -e .env.sprint3.local -o -- next dev",
     "build": "next build",
+    "build:s1": "dotenv -e .env.sprint1.local -o -- next build",
+    "build:s2": "dotenv -e .env.sprint2.local -o -- next build",
+    "build:s3": "dotenv -e .env.sprint3.local -o -- next build",
+    "start:s1": "dotenv -e .env.sprint1.local -o -- next start -p 3001",
+    "start:s2": "dotenv -e .env.sprint2.local -o -- next start -p 3001",
     "start": "next start",
-    "lint": "eslint"
+    "start:s3": "dotenv -e .env.sprint3.local -o -- next start -p 3001",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "verify:profile": "node scripts/verify-profile.mjs"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "next": "16.3.8",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv-cli": "11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "typescript": "^5"
