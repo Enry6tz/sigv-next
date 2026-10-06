@@ -1,5 +1,5 @@
 export type Flight = {
-  id: string; origin: string; destination: string; departure: string;
+  id: string; code?: string; origin: string; destination: string; departure: string;
   arrival: string; date: string; economy: number; first: number;
   seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado";
   isDemo?: boolean; archivedAt?: string | null;
@@ -37,6 +37,9 @@ export const reservation = {
 export const mockCollections: Record<string, unknown> = {
   dashboard: { flights: flights.length, activeFlights: flights.filter((f) => f.status === "Activo").length, reservations: 24, checkIns: 13 },
   flights, airports,
+  aircraft: [
+    { id: "00000000-0000-4000-8000-000000000001", model: "Boeing 737-800", registration: "LV-DEMO", capacityEconomy: 120, capacityFirst: 12, status: "Activa", archivedAt: null },
+  ],
   capacities: flights.map((f) => ({ flightId: f.id, economy: f.seatsEconomy, first: f.seatsFirst })),
   fares: flights.map((f) => ({ flightId: f.id, economy: f.economy, first: f.first })),
   users: [{ id: "USR-01", name: "Martín Pérez", role: "Pasajero", status: "Activo" }, { id: "USR-02", name: "Ana Gómez", role: "Mostrador", status: "Activo" }],

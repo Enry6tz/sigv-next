@@ -1,12 +1,10 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "./server";
-
-export class ApiError extends Error {
-  constructor(message: string, public status = 400) {
-    super(message);
-  }
-}
+import { ApiError, databaseError } from "@/lib/api-errors";
+import { validateFlightSchedule } from "@/lib/flight-schedule";
+import { displayFlightCode } from "@/lib/flight-code";
+export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
 type Json = Record<string, unknown>;
@@ -29,19 +27,25 @@ async function requireRole(client: Client, roles: string[]) {
   return data as string;
 }
 
-function unwrap<T>(result: { data: T | null; error: { message: string } | null }): T {
-  if (result.error) throw new ApiError(result.error.message);
+function unwrap<T>(result: { data: T | null; error: { code?: string; message: string } | null }): T {
+  if (result.error) {
+    console.error("Data operation failed", result.error);
+    throw databaseError(result.error);
+  }
   return result.data as T;
 }
 
 function flightDto(row: Json) {
   return {
     id: row.id, origin: row.origin, destination: row.destination,
+    code: displayFlightCode({ id: String(row.id), scheduleId: typeof row.schedule_id === "string" ? row.schedule_id : null }),
     date: row.flight_date, departure: String(row.departure).slice(0, 5),
     arrival: String(row.arrival).slice(0, 5), status: row.status,
     economy: Number(row.economy), first: Number(row.first),
     seatsEconomy: row.seats_economy, seatsFirst: row.seats_first,
     isDemo: row.is_demo, archivedAt: row.archived_at,
+    baggageIncluded: row.baggage_included, seatSelectionEnabled: row.seat_selection_enabled,
+    onlineCheckInEnabled: row.online_check_in_enabled,
   };
 }
 
@@ -221,6 +225,12 @@ function positiveNumber(value: unknown, label: string) {
 
 export async function writeResource(resource: string, method: "POST" | "PATCH" | "DELETE", payload: Json) {
   const client = await createClient();
+  if (resource === "flights" && method === "POST" && payload.action === "publish") {
+    await requireRole(client, ["admin"]);
+    const error = validateFlightSchedule(payload);
+    if (error) throw new ApiError(error);
+    return unwrap(await client.rpc("sigv_publish_flight_schedule", { p_payload: payload }));
+  }
   if (resource === "aircraft" && method === "POST") {
     await requireRole(client, ["admin"]);
     const values = { model: text(payload.model), registration: text(payload.registration).toUpperCase(),

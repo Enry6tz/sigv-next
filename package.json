@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "dev": "next dev",
     "dev:s1": "dotenv -e .env.sprint1.local -o -- next dev",
     "dev:s2": "dotenv -e .env.sprint2.local -o -- next dev",

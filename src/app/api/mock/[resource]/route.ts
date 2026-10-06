@@ -3,6 +3,8 @@ import { airports, flights, mockCollections, reservation } from "@/lib/mock-data
 import { resourceSprint } from "@/lib/catalog";
 import { appSprint, dataProvider } from "@/lib/sprint";
 import { ApiError, readResource, writeResource } from "@/lib/supabase/resources";
+import { publicError } from "@/lib/api-errors";
+import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +18,8 @@ function gate(resource: string) {
 }
 
 function liveError(error: unknown) {
-  const status = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : "No se pudo consultar Supabase";
+  const { status, message } = publicError(error);
+  if (!(error instanceof ApiError)) console.error("API operation failed", error);
   return NextResponse.json({ error: message, mode: "supabase" }, { status });
 }
 
@@ -68,6 +70,16 @@ export async function POST(request: NextRequest, context: Context) {
     }
   }
 
+  if (resource === "flights" && payload.action === "publish") {
+    const aircraft = (mockCollections.aircraft as Aircraft[]).find((plane) => plane.id === payload.aircraftId);
+    const invalid = validateFlightSchedule(payload, aircraft);
+    if (invalid || !aircraft) return NextResponse.json({ error: invalid ?? "Seleccioná una aeronave disponible." }, { status: 400 });
+    if (![payload.origin, payload.destination].every((code) => airports.some((airport) => airport.code === String(code).trim().toUpperCase())))
+      return NextResponse.json({ error: "Seleccioná los aeropuertos de origen y destino." }, { status: 400 });
+    return NextResponse.json({ mode: "mock", persisted: false, data: {
+      created: countDepartures(String(payload.saleStart), String(payload.saleEnd), payload.weekdays as number[]),
+    } }, { status: 202 });
+  }
   if (resource === "reservations") {
     const count = Number(payload.passengerCount);
     if (!Number.isInteger(count) || count < 1 || count > 9) {
