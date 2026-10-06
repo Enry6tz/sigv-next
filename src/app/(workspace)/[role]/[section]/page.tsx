@@ -25,7 +25,7 @@ export default async function SectionPage({ params, searchParams }: { params: Pr
     reservation: typeof query.reservation === "string" ? query.reservation : "",
   };
   return <>
-    <div className="page-heading"><div><p className="kicker">{role.toUpperCase()} / {sectionModule.rf}</p><h1>{sectionModule.label}</h1><p>{sectionModule.description}</p></div>{sectionModule.us !== "—" && <span className="page-us">{sectionModule.us}</span>}</div>
+    {role === "admin" && section === "vuelos" ? <h1 className="sr-only">Listado de vuelos</h1> : <div className="page-heading"><div><p className="kicker">{role.toUpperCase()} / {sectionModule.rf}</p><h1>{sectionModule.label}</h1><p>{sectionModule.description}</p></div>{sectionModule.us !== "—" && <span className="page-us">{sectionModule.us}</span>}</div>}
     <ModuleContent module={sectionModule} sprint={appSprint} initialFlight={initialFlight} initialQuery={initialQuery} live={dataProvider === "supabase"} />
   </>;
 }

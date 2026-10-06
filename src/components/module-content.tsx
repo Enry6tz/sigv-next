@@ -5,7 +5,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { Module } from "@/lib/catalog";
 import type { Flight } from "@/lib/mock-data";
 import { DomainManager } from "./domain-manager";
-import { FlightCreateForm } from "./flight-create-form";
+import { AdminFlights } from "./admin-flights";
 import { ActionNotice, type Notice } from "./action-notice";
 import { mutate } from "@/lib/mutations";
 import { displayFlightCode } from "@/lib/flight-code";
@@ -59,45 +59,6 @@ function SearchFlights({ sprint, initialQuery, live }: { sprint: number; initial
     </section>
     <section className="panel"><div className="panel-title"><div><p className="kicker">RESULTADOS</p><h2>Vuelos disponibles</h2></div><span className="subtle-count">{filtered.length} resultados</span></div>{error ? <p role="alert" className="error-text">{error}</p> : !data ? <p role="status">Cargando vuelos…</p> : <FlightTable flights={filtered} sprint={sprint} live={live} />}{searched && <p role="status" className="form-hint">Resultados actualizados para los filtros seleccionados.</p>}</section>
   </>;
-}
-
-function AdminFlights({ sprint, live }: { sprint: number; live: boolean }) {
-  const { data, error, refresh } = useMock<Flight[]>(live ? "flights?includeArchived=1" : "flights");
-  const [filter, setFilter] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState<Flight | null>(null);
-  const [message, setMessage] = useState<Notice>(null);
-  const [busy, setBusy] = useState(false);
-  const visible = (data ?? []).filter((f) => `${displayFlightCode(f)} ${f.origin} ${f.destination}`.toLowerCase().includes(filter.toLowerCase()));
-  async function edit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!editing) return;
-    const changes = Object.fromEntries(new FormData(event.currentTarget));
-    if (busy) return;
-    setBusy(true); setMessage(null);
-    const result = await mutate("flights", "PATCH", { flightId: editing.id, ...changes });
-    setMessage({ ok: result.ok, text: result.ok ? "Vuelo actualizado correctamente." : result.error });
-    if (result.ok) { setEditing(null); refresh(); }
-    setBusy(false);
-  }
-  async function archive(flight: Flight) {
-    if (busy) return;
-    setBusy(true); setMessage(null);
-    const method = flight.archivedAt ? "PATCH" : "DELETE";
-    const body = flight.archivedAt ? { flightId: flight.id, restore: true } : { flightId: flight.id };
-    const result = await mutate("flights", method, body);
-    setMessage({ ok: result.ok, text: result.ok ? flight.archivedAt ? "Vuelo restaurado." : "Vuelo archivado. Podés restaurarlo desde esta lista." : result.error });
-    if (result.ok) refresh();
-    setBusy(false);
-  }
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">INVENTARIO DE VUELOS</p><h2>Programaciones</h2></div><button className="button dark" disabled={busy} onClick={() => { setShowForm(!showForm); setMessage(null); }}>{showForm ? "Cerrar formulario" : "+ Crear vuelo"}</button></div>
-    {showForm && <FlightCreateForm live={live} onBusyChange={setBusy} onCancel={() => setShowForm(false)} onSuccess={(text) => { setMessage({ ok: true, text }); setShowForm(false); refresh(); }} />}
-    <ActionNotice notice={message} />
-    <div className="table-controls"><label className="search-field">Buscar código o ruta<input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Ej. AR-1420 o EZE" /></label><span>{visible.length} vuelos registrados</span></div>
-    {error ? <p role="alert" className="error-text">{error}</p> : !data ? <p role="status">Cargando vuelos…</p> : <FlightTable flights={visible} admin sprint={sprint} live={live} />}
-    {live && <div className="record-grid">{visible.map((flight) => <div className="record-card" key={flight.id}><strong>{displayFlightCode(flight)} · {flight.origin} → {flight.destination}</strong><p>{flight.archivedAt ? "Archivado" : flight.status} · {date(flight.date)}</p><div className="action-row"><button type="button" className="button small" onClick={() => setEditing(flight)}>Editar</button><button type="button" className="button small" onClick={() => archive(flight)}>{flight.archivedAt ? "Restaurar" : "Archivar"}</button></div></div>)}</div>}
-    {editing && <form className="stack-form inline-form" onSubmit={edit}><h3>Editar {displayFlightCode(editing)} · {date(editing.date)}</h3><div className="form-row"><label>Fecha<input type="date" name="date" defaultValue={editing.date} required /></label><label>Puerta<input name="gate" defaultValue="" placeholder="Ej. B04" /></label></div><div className="form-row"><label>Salida<input type="time" name="departure" defaultValue={editing.departure} required /></label><label>Llegada<input type="time" name="arrival" defaultValue={editing.arrival} required /></label></div><label>Estado<select name="status" defaultValue={editing.status}><option>Activo</option><option>Retrasado</option><option>Cancelado</option></select></label><div className="action-row"><button className="button dark" type="submit">Guardar cambios</button><button className="button" type="button" onClick={() => setEditing(null)}>Cerrar</button></div></form>}
-  </section>;
 }
 
 type ReservationResult = { code: string; flightId: string; cabin: string; seats: number; status: string };
@@ -250,7 +211,7 @@ function Dashboard({ module, sprint, live }: { module: Module; sprint: number; l
 export function ModuleContent({ module, sprint, initialFlight, initialQuery, live }: { module: Module; sprint: number; initialFlight?: string; initialQuery: { origin: string; destination: string; date: string; reservation: string }; live: boolean }) {
   if (module.slug === "inicio") return <Dashboard module={module} sprint={sprint} live={live} />;
   if (module.role === "pasajero" && module.slug === "buscar-vuelos") return <SearchFlights sprint={sprint} initialQuery={initialQuery} live={live} />;
-  if (module.role === "admin" && module.slug === "vuelos") return <AdminFlights sprint={sprint} live={live} />;
+  if (module.role === "admin" && module.slug === "vuelos") return <AdminFlights live={live} />;
   if (module.slug === "compra") return <Booking initialFlight={initialFlight} live={live} />;
   if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} live={live} />;
   if (module.slug === "mis-reservas") return <Reservations live={live} />;

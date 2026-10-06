@@ -4,6 +4,7 @@ import { createClient } from "./server";
 import { ApiError, databaseError } from "@/lib/api-errors";
 import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
+import { adminFlightDto } from "@/lib/admin-flights";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
@@ -81,6 +82,13 @@ async function reservations(client: Client) {
 export async function readResource(resource: string, filters: URLSearchParams) {
   const client = await createClient();
   if (resource === "flights") return flights(client, filters);
+  if (resource === "admin-flights") {
+    await requireRole(client, ["admin"]);
+    const rows = unwrap(await client.from("flight_schedules")
+      .select("*,aircraft(model),schedule_frequencies(weekday),schedule_configurations(cabin,capacity,price)")
+      .is("archived_at", null).order("code"));
+    return rows.map((row: Json) => adminFlightDto(row));
+  }
   if (resource === "airports") {
     let query = client.from("airports").select("*").order("code");
     if (filters.get("includeArchived") === "1") await requireRole(client, ["admin"]);
@@ -225,6 +233,22 @@ function positiveNumber(value: unknown, label: string) {
 
 export async function writeResource(resource: string, method: "POST" | "PATCH" | "DELETE", payload: Json) {
   const client = await createClient();
+  if (resource === "admin-flights" && ["PATCH", "DELETE"].includes(method)) {
+    await requireRole(client, ["admin"]);
+    if (!text(payload.id)) throw new ApiError("Falta la programación del vuelo");
+    if (method === "PATCH" && payload.action === "fares") {
+      positiveNumber(payload.economy, "Tarifa Economy");
+      positiveNumber(payload.first, "Tarifa Primera");
+    } else if (method === "PATCH" && payload.restore !== true) {
+      const error = validateFlightSchedule(payload);
+      if (error) throw new ApiError(error);
+      if (!["Activa", "Suspendida"].includes(text(payload.status))) throw new ApiError("Seleccioná un estado válido");
+    }
+    return unwrap(await client.rpc("sigv_manage_flight_schedule", {
+      p_schedule_id: text(payload.id), p_action: method === "DELETE" ? "delete" : payload.restore === true ? "restore" : payload.action === "fares" ? "fares" : "update",
+      p_payload: payload,
+    }));
+  }
   if (resource === "flights" && method === "POST" && payload.action === "publish") {
     await requireRole(client, ["admin"]);
     const error = validateFlightSchedule(payload);
@@ -268,7 +292,12 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "schedules" && ["PATCH", "DELETE"].includes(method)) {
     await requireRole(client, ["admin"]);
-    const updates: Json = method === "DELETE" ? { archived_at: new Date().toISOString() } : {};
+    if (method === "DELETE" || payload.restore === true) {
+      return unwrap(await client.rpc("sigv_manage_flight_schedule", {
+        p_schedule_id: text(payload.id), p_action: method === "DELETE" ? "delete" : "restore", p_payload: {},
+      }));
+    }
+    const updates: Json = {};
     if (method === "PATCH") {
       for (const [from, to] of Object.entries({ origin: "origin", destination: "destination", aircraftId: "aircraft_id",
         departure: "departure", arrival: "arrival", saleStart: "sale_start", saleEnd: "sale_end", status: "status" })) {

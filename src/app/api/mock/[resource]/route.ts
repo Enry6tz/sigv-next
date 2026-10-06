@@ -5,6 +5,7 @@ import { appSprint, dataProvider } from "@/lib/sprint";
 import { ApiError, readResource, writeResource } from "@/lib/supabase/resources";
 import { publicError } from "@/lib/api-errors";
 import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
+import { adminFlightDto } from "@/lib/admin-flights";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,14 @@ export async function GET(request: NextRequest, context: Context) {
     }
   }
   let data = mockCollections[resource] ?? [];
+  if (resource === "admin-flights") data = flights.map((flight) => adminFlightDto({
+    id: flight.id, code: flight.id, origin: flight.origin, destination: flight.destination,
+    aircraft_id: null, aircraft: null, departure: flight.departure, arrival: flight.arrival,
+    sale_start: flight.date, sale_end: flight.date, status: flight.status === "Cancelado" ? "Suspendida" : "Activa",
+    schedule_frequencies: [{ weekday: new Date(`${flight.date}T12:00:00Z`).getUTCDay() }],
+    schedule_configurations: [{ cabin: "Economy", capacity: flight.seatsEconomy, price: flight.economy },
+      { cabin: "Primera", capacity: flight.seatsFirst, price: flight.first }],
+  }));
   if (resource === "flights") {
     const origin = request.nextUrl.searchParams.get("origin")?.toUpperCase();
     const destination = request.nextUrl.searchParams.get("destination")?.toUpperCase();
@@ -109,7 +118,7 @@ export async function PATCH(request: NextRequest, context: Context) {
   const { resource } = await context.params;
   const blocked = gate(resource);
   if (blocked) return blocked;
-  if (!["flights", "airports", "aircraft", "schedules", "configurations", "seats", "capacities", "fares", "profile", "users", "reservations", "disruptions", "notifications"].includes(resource)) {
+  if (!["admin-flights", "flights", "airports", "aircraft", "schedules", "configurations", "seats", "capacities", "fares", "profile", "users", "reservations", "disruptions", "notifications"].includes(resource)) {
     return NextResponse.json({ error: "Operación no disponible para este recurso" }, { status: 405 });
   }
   let payload: Record<string, unknown>;
@@ -134,8 +143,8 @@ export async function DELETE(request: NextRequest, context: Context) {
   const { resource } = await context.params;
   const blocked = gate(resource);
   if (blocked) return blocked;
-  if (resource !== "flights" && !(dataProvider === "supabase" && ["reservations", "airports", "aircraft", "schedules", "frequencies", "configurations"].includes(resource))) return NextResponse.json({ error: "Operación no disponible para este recurso" }, { status: 405 });
-  let payload: { flightId?: string; reservationCode?: string };
+  if (!["flights", "admin-flights"].includes(resource) && !(dataProvider === "supabase" && ["reservations", "airports", "aircraft", "schedules", "frequencies", "configurations"].includes(resource))) return NextResponse.json({ error: "Operación no disponible para este recurso" }, { status: 405 });
+  let payload: { id?: string; flightId?: string; reservationCode?: string };
   try {
     payload = await request.json();
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("bad payload");
@@ -150,6 +159,6 @@ export async function DELETE(request: NextRequest, context: Context) {
       return liveError(error);
     }
   }
-  if (!flights.some((flight) => flight.id === payload.flightId)) return NextResponse.json({ error: "Vuelo no encontrado" }, { status: 404 });
+  if (!flights.some((flight) => flight.id === (resource === "admin-flights" ? payload.id : payload.flightId))) return NextResponse.json({ error: "Vuelo no encontrado" }, { status: 404 });
   return NextResponse.json({ mode: "mock", persisted: false, data: { flightId: payload.flightId, status: "Cancelación simulada" } }, { status: 202 });
 }

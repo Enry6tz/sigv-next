@@ -5,12 +5,14 @@ import { appSprint, dataProvider } from "@/lib/sprint";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { SignOutButton } from "@/components/supabase-auth-form";
 import { createClient } from "@/lib/supabase/server";
+import { WorkspaceFrame } from "@/components/workspace-frame";
 
 export default async function WorkspaceLayout({ children, params }: { children: React.ReactNode; params: Promise<{ role: string }> }) {
   const { role } = await params;
   if (!isRole(role)) notFound();
   const live = dataProvider === "supabase";
   let signedIn = false;
+  let userName = "Administrador";
   if (live) {
     const supabase = await createClient();
     const { data } = await supabase.auth.getClaims();
@@ -19,10 +21,14 @@ export default async function WorkspaceLayout({ children, params }: { children: 
       if (!signedIn) redirect(`/ingresar?next=/${role}/inicio`);
       const { data: actualRole } = await supabase.rpc("sigv_role");
       if (actualRole !== role && !(role === "mostrador" && actualRole === "admin")) redirect("/pasajero/inicio");
+      if (role === "admin") {
+        const { data: profile } = await supabase.from("profiles").select("name").eq("user_id", data!.claims!.sub).single();
+        userName = profile?.name || userName;
+      }
     }
   }
   const items = roleModules(role, appSprint).filter((item) => !live || signedIn || ["inicio", "buscar-vuelos"].includes(item.slug));
-  return <div className="workspace">
+  const normal = <div className="workspace">
     <aside className="sidebar">
       <Link href="/" className="brand"><span className="brand-mark">✈</span><span><strong>SIGV</strong><small>AEROLÍNEA NACIONAL</small></span></Link>
       <div className="sidebar-group"><p className="side-caption">{roleLabels[role]}</p><SidebarNav role={role} items={items} /></div>
@@ -34,4 +40,5 @@ export default async function WorkspaceLayout({ children, params }: { children: 
       <main className="workspace-content">{children}</main>
     </div>
   </div>;
+  return <WorkspaceFrame normal={normal} name={userName} live={live} role={role} items={items}>{children}</WorkspaceFrame>;
 }

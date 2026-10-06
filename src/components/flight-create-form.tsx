@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { countDepartures, durationMinutes, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
 import { mutate } from "@/lib/mutations";
+import type { AdminFlight } from "@/lib/admin-flights";
 
 type Airport = { code: string; name: string; city: string };
 const weekdays = [{ day: 1, label: "Lun" }, { day: 2, label: "Mar" }, { day: 3, label: "Mié" }, { day: 4, label: "Jue" }, { day: 5, label: "Vie" }, { day: 6, label: "Sáb" }, { day: 0, label: "Dom" }];
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 2 }).format(value);
 
-export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
+export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange, initialFlight }: {
   live: boolean; onCancel: () => void; onSuccess: (message: string) => void; onBusyChange: (busy: boolean) => void;
+  initialFlight?: AdminFlight;
 }) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   const [airports, setAirports] = useState<Airport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,9 +21,16 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
   const [reload, setReload] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ flightCode: "", aircraftId: "", origin: "", destination: "", departure: "", arrival: "", saleStart: "", saleEnd: "", seatsEconomy: "0", seatsFirst: "0", economy: "", first: "" });
-  const [days, setDays] = useState<number[]>([]);
-  const [notes, setNotes] = useState({ baggageIncluded: false, seatSelectionEnabled: true, onlineCheckInEnabled: true });
+  const [form, setForm] = useState({ flightCode: initialFlight?.code ?? "", aircraftId: initialFlight?.aircraftId ?? "",
+    origin: initialFlight?.origin ?? "", destination: initialFlight?.destination ?? "",
+    departure: initialFlight?.departure ?? "", arrival: initialFlight?.arrival ?? "",
+    saleStart: initialFlight?.saleStart ?? "", saleEnd: initialFlight?.saleEnd ?? "",
+    seatsEconomy: String(initialFlight?.seatsEconomy ?? 0), seatsFirst: String(initialFlight?.seatsFirst ?? 0),
+    economy: initialFlight ? String(initialFlight.economy) : "", first: initialFlight ? String(initialFlight.first) : "" });
+  const [days, setDays] = useState<number[]>(initialFlight?.weekdays ?? []);
+  const [status, setStatus] = useState(initialFlight?.status ?? "Activa");
+  const [notes, setNotes] = useState({ baggageIncluded: initialFlight?.baggageIncluded ?? false,
+    seatSelectionEnabled: initialFlight?.seatSelectionEnabled ?? true, onlineCheckInEnabled: initialFlight?.onlineCheckInEnabled ?? true });
 
   useEffect(() => {
     let active = true;
@@ -44,6 +54,13 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
     return () => { active = false; };
   }, [reload]);
 
+  useEffect(() => {
+    if (loading || loadError) return;
+    const control = formRef.current?.elements.namedItem(initialFlight ? "aircraftId" : "flightCode");
+    if (control instanceof HTMLElement) control.focus({ preventScroll: true });
+    formRef.current?.closest("dialog")?.scrollTo({ top: 0 });
+  }, [loading, loadError, initialFlight]);
+
   const selected = aircraft.find((plane) => plane.id === form.aircraftId);
   const duration = durationMinutes(form.departure, form.arrival);
   const total = Number(form.seatsEconomy) + Number(form.seatsFirst);
@@ -59,20 +76,22 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
     event.preventDefault();
     if (busy) return;
     setError("");
-    const payload = { ...form, ...notes, action: "publish", weekdays: days };
+    const payload = { ...form, ...notes, action: "publish", weekdays: days, status, id: initialFlight?.id };
     const invalid = validateFlightSchedule(payload, selected);
     if (invalid || !selected) { setError(invalid ?? "Seleccioná una aeronave disponible."); return; }
     setBusy(true); onBusyChange(true);
-    const result = await mutate("flights", "POST", payload);
-    if (result.ok) onSuccess(live
+    const result = await mutate(initialFlight ? "admin-flights" : "flights", initialFlight ? "PATCH" : "POST", payload);
+    if (result.ok) onSuccess(initialFlight
+      ? live ? `Vuelo ${form.flightCode} actualizado correctamente.` : "Edición simulada. No se guardaron datos."
+      : live
       ? `Programación ${form.flightCode.toUpperCase()} publicada correctamente. ${result.data.created} vuelo(s) creados.`
       : `Simulación completada: se generarían ${departures} vuelo(s). No se guardaron datos.`);
     else setError(result.error);
     setBusy(false); onBusyChange(false);
   }
 
-  return <form className="flight-create-form" onSubmit={submit} aria-label="Alta de nuevo vuelo">
-    <div className="flight-form-heading"><p className="kicker">VUELOS / ALTA DE NUEVO VUELO</p><h3>Nueva programación</h3></div>
+  return <form ref={formRef} className="flight-create-form" onSubmit={submit} aria-label={initialFlight ? `Editar vuelo ${initialFlight.code}` : "Alta de nuevo vuelo"}>
+    <div className="flight-form-heading"><h3>{initialFlight ? `Editar vuelo ${initialFlight.code}` : "Crear nuevo vuelo"}</h3></div>
     {loading && <p role="status">Cargando aeronaves y aeropuertos…</p>}
     {loadError && <div className="flight-form-alert" role="alert"><p>{loadError}</p><button type="button" className="button small" onClick={() => { setLoadError(""); setLoading(true); setReload((value) => value + 1); }}>Reintentar</button></div>}
     {!loading && !loadError && aircraft.length === 0 && <p role="alert" className="error-text">No hay aeronaves activas. Agregá o activá una aeronave en Aviones para crear el vuelo.</p>}
@@ -82,7 +101,7 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
       <div className="flight-form-column">
         <fieldset className="flight-section"><legend>A — Datos operativos</legend><div className="stack-form">
           <div className="form-row">
-            <label>Código de vuelo *<input name="flightCode" placeholder="AR-1420" value={form.flightCode} onChange={(event) => update("flightCode", event.target.value.toUpperCase())} minLength={2} maxLength={20} pattern="[A-Za-z0-9][A-Za-z0-9-]{1,19}" required /></label>
+            <label>Código de vuelo *<input name="flightCode" placeholder="AR-1420" value={form.flightCode} readOnly={Boolean(initialFlight)} onChange={(event) => update("flightCode", event.target.value.toUpperCase())} minLength={2} maxLength={20} pattern="[A-Za-z0-9][A-Za-z0-9-]{1,19}" required /></label>
             <label>Aeronave *<select name="aircraftId" value={form.aircraftId} onChange={(event) => {
               setError("");
               const plane = aircraft.find((item) => item.id === event.target.value);
@@ -97,7 +116,8 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
         <fieldset className="flight-section"><legend>B — Frecuencia y período de venta</legend><div className="stack-form">
           <div><p className="flight-field-label" id="operation-days">Días de operación *</p><div className="weekday-toggles" role="group" aria-labelledby="operation-days">{weekdays.map(({ day, label }) => <button key={day} type="button" aria-pressed={days.includes(day)} onClick={() => { setError(""); setDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day]); }}>{label}</button>)}</div><p className="form-hint">{days.length} {days.length === 1 ? "día" : "días"} por semana</p></div>
           <div className="form-row"><label>Período venta — desde *<input name="saleStart" type="date" value={form.saleStart} onChange={(event) => update("saleStart", event.target.value)} required /></label><label>Período venta — hasta *<input name="saleEnd" type="date" min={form.saleStart || undefined} value={form.saleEnd} onChange={(event) => update("saleEnd", event.target.value)} required /></label></div>
-          <p className="form-hint">Se publicarán vuelos en los días seleccionados dentro de este período.{departures > 0 && ` ${departures} vuelo(s) previstos.`}</p>
+          <p className="form-hint">{initialFlight ? "Los cambios se aplican a los vuelos de esta programación. No se pueden quitar fechas con reservas vigentes." : "Se publicarán vuelos en los días seleccionados dentro de este período."}{departures > 0 && ` ${departures} vuelo(s) previstos.`}</p>
+          {initialFlight && <label>Estado<select value={status} onChange={(event) => setStatus(event.target.value as AdminFlight["status"])}><option value="Activa">Activo</option><option value="Suspendida">Inactivo</option></select></label>}
         </div></fieldset>
       </div>
       <div className="flight-form-column">
@@ -120,6 +140,6 @@ export function FlightCreateForm({ live, onCancel, onSuccess, onBusyChange }: {
       </div>
     </fieldset>
     {error && <p className="flight-form-alert error-text" role="alert">{error}</p>}
-    <div className="flight-form-footer"><p className="form-hint">* Todos los campos marcados son obligatorios.</p><div className="action-row"><button className="button" type="button" disabled={busy} onClick={onCancel}>Cancelar</button><button className="button dark" type="submit" disabled={busy || loading || Boolean(loadError) || !aircraft.length || airports.length < 2}>{busy ? "Publicando…" : live ? "Guardar y publicar vuelo →" : "Simular publicación →"}</button></div></div>
+    <div className="flight-form-footer"><p className="form-hint">* Todos los campos marcados son obligatorios.</p><div className="action-row"><button className="button" type="button" disabled={busy} onClick={onCancel}>Cancelar</button><button className="button dark" type="submit" disabled={busy || loading || Boolean(loadError) || !aircraft.length || airports.length < 2}>{busy ? "Guardando…" : initialFlight ? "Guardar cambios" : live ? "Guardar y publicar vuelo →" : "Simular publicación →"}</button></div></div>
   </form>;
 }
