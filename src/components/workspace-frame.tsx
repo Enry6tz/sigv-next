@@ -6,8 +6,9 @@ import type { ReactNode } from "react";
 import type { Module, Role } from "@/lib/catalog";
 import { SignOutButton } from "./supabase-auth-form";
 
-export function WorkspaceFrame({ normal, children, name, live, role, items }: { normal: ReactNode; children: ReactNode; name: string; live: boolean; role: Role; items: Module[] }) {
+export function WorkspaceFrame({ normal, children, name, live, role, items, passengerHeader }: { normal: ReactNode; children: ReactNode; name: string; live: boolean; role: Role; items: Module[]; passengerHeader?: ReactNode }) {
   const pathname = usePathname();
+  if (role === "pasajero") return <>{passengerHeader}<main className={pathname === "/pasajero/buscar-vuelos" ? undefined : "passenger-container passenger-workspace-content"}>{children}</main></>;
   if (role !== "admin") return normal;
   return <div className="admin-flights-workspace"><header className="admin-flights-header">
     <div><Link href="/admin/vuelos" className="admin-flights-brand"><span>AN</span>SIGV</Link><span className="admin-flights-header-title">Panel Administrativo</span></div>

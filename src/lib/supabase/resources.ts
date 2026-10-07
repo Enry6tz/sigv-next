@@ -47,6 +47,8 @@ function flightDto(row: Json) {
     isDemo: row.is_demo, archivedAt: row.archived_at,
     baggageIncluded: row.baggage_included, seatSelectionEnabled: row.seat_selection_enabled,
     onlineCheckInEnabled: row.online_check_in_enabled,
+    stops: Array.isArray(row.stops) ? row.stops : [],
+    ...(typeof row.duration_minutes === "number" ? { durationMinutes: row.duration_minutes } : {}),
   };
 }
 
@@ -66,12 +68,13 @@ async function flights(client: Client, filters?: URLSearchParams) {
 async function reservations(client: Client) {
   await requireUser(client);
   const rows = unwrap(await client.from("reservations")
-    .select("id,code,flight_id,cabin,passenger_count,total_amount,status,created_at,reservation_passengers(id,first_name,last_name,document,seat,baggage_kg,checked_in_at)")
+    .select("id,code,flight_id,cabin,passenger_count,total_amount,status,created_at,round_trip_id,reservation_passengers(id,first_name,last_name,document,seat,baggage_kg,checked_in_at)")
     .order("created_at", { ascending: false }));
   return rows.map((row: Json) => {
     const people = row.reservation_passengers as Json[];
     return {
       code: row.code, flightId: row.flight_id, cabin: row.cabin,
+      returnReservationCode: row.round_trip_id ? rows.find((other: Json) => other.round_trip_id === row.round_trip_id && other.code !== row.code)?.code : undefined,
       seats: row.passenger_count, status: row.status, amount: Number(row.total_amount),
       passenger: people[0] ? `${people[0].first_name} ${people[0].last_name}` : "",
       document: people[0]?.document ?? "", passengers: people,
@@ -347,6 +350,10 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     const count = Number(payload.passengerCount);
     if (!Array.isArray(passengers) || !Number.isInteger(count) || count < 1 || count > 9 || passengers.length !== count)
       throw new ApiError("La compra admite entre 1 y 9 pasajeros identificados");
+    if (text(payload.returnFlightId)) return unwrap(await client.rpc("sigv_reserve_round_trip", {
+      p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin),
+      p_return_flight_id: text(payload.returnFlightId), p_return_cabin: text(payload.returnCabin), p_passengers: passengers,
+    }));
     return unwrap(await client.rpc("sigv_reserve", { p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin), p_passengers: passengers }));
   }
   if (resource === "reservations" && method === "DELETE") {
@@ -355,6 +362,9 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "payments" && method === "POST") {
     await requireUser(client);
+    if (text(payload.returnReservationCode)) return unwrap(await client.rpc("sigv_demo_round_trip_payment", {
+      p_code: text(payload.reservationCode), p_return_code: text(payload.returnReservationCode), p_method: text(payload.method),
+    }));
     return unwrap(await client.rpc("sigv_demo_payment", { p_code: text(payload.reservationCode), p_method: text(payload.method) }));
   }
   if (resource === "check-in" && method === "POST") {

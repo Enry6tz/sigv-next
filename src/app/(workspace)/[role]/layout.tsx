@@ -6,6 +6,7 @@ import { SidebarNav } from "@/components/sidebar-nav";
 import { SignOutButton } from "@/components/supabase-auth-form";
 import { createClient } from "@/lib/supabase/server";
 import { WorkspaceFrame } from "@/components/workspace-frame";
+import { PassengerHeader } from "@/components/passenger-header";
 
 export default async function WorkspaceLayout({ children, params }: { children: React.ReactNode; params: Promise<{ role: string }> }) {
   const { role } = await params;
@@ -40,5 +41,5 @@ export default async function WorkspaceLayout({ children, params }: { children: 
       <main className="workspace-content">{children}</main>
     </div>
   </div>;
-  return <WorkspaceFrame normal={normal} name={userName} live={live} role={role} items={items}>{children}</WorkspaceFrame>;
+  return <WorkspaceFrame normal={normal} name={userName} live={live} role={role} items={items} passengerHeader={<PassengerHeader signedIn={signedIn} sprint={appSprint} />}>{children}</WorkspaceFrame>;
 }

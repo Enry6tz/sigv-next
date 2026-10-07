@@ -3,6 +3,8 @@ export type Flight = {
   arrival: string; date: string; economy: number; first: number;
   seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado";
   isDemo?: boolean; archivedAt?: string | null;
+  stops?: string[]; durationMinutes?: number;
+  baggageIncluded?: boolean; seatSelectionEnabled?: boolean; onlineCheckInEnabled?: boolean;
 };
 
 export const airports = [
@@ -27,6 +29,8 @@ export const flights: Flight[] = [
   { id: "AR-0885", origin: "EZE", destination: "SCL", departure: "15:40", arrival: "17:50", date: date(8), economy: 166900, first: 342000, seatsEconomy: 47, seatsFirst: 6, status: "Retrasado" },
   { id: "AR-3310", origin: "COR", destination: "EZE", departure: "20:10", arrival: "21:45", date: date(9), economy: 88900, first: 196000, seatsEconomy: 91, seatsFirst: 10, status: "Activo" },
   { id: "AR-0441", origin: "AEP", destination: "USH", departure: "06:30", arrival: "10:15", date: date(10), economy: 195000, first: 401000, seatsEconomy: 39, seatsFirst: 5, status: "Activo" },
+  { id: "AR-1421", origin: "BRC", destination: "EZE", departure: "14:20", arrival: "16:45", date: date(11), economy: 119500, first: 269000, seatsEconomy: 55, seatsFirst: 8, status: "Activo" },
+  { id: "AR-0886", origin: "SCL", destination: "EZE", departure: "10:30", arrival: "12:40", date: date(12), economy: 158900, first: 328000, seatsEconomy: 40, seatsFirst: 6, status: "Activo" },
 ];
 
 export const reservation = {

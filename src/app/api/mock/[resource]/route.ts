@@ -6,6 +6,7 @@ import { ApiError, readResource, writeResource } from "@/lib/supabase/resources"
 import { publicError } from "@/lib/api-errors";
 import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
 import { adminFlightDto } from "@/lib/admin-flights";
+import { cabinAvailable, validReturnFlight, type Cabin } from "@/lib/passenger-search";
 
 export const dynamic = "force-dynamic";
 
@@ -98,10 +99,16 @@ export async function POST(request: NextRequest, context: Context) {
     if (!Array.isArray(passengers) || passengers.length !== count || passengers.some((p) => !p || typeof p !== "object" || !p.firstName || !p.lastName || !p.document)) {
       return NextResponse.json({ error: "Completá nombre, apellido y DNI de cada pasajero" }, { status: 400 });
     }
-    if (!flights.some((f) => f.id === payload.flightId && f.status !== "Cancelado")) {
+    if (!["Economy", "Primera"].includes(String(payload.cabin))) return NextResponse.json({ error: "Cabina inválida" }, { status: 400 });
+    const flight = flights.find((f) => f.id === payload.flightId);
+    if (!flight || !cabinAvailable(flight, payload.cabin as Cabin, count)) {
       return NextResponse.json({ error: "Vuelo no disponible" }, { status: 400 });
     }
-    return NextResponse.json({ mode: "mock", persisted: false, data: { ...reservation, code: `DEMO-${Date.now().toString(36).toUpperCase()}`, flightId: payload.flightId, cabin: payload.cabin, seats: count, status: "Pendiente de pago" } }, { status: 202 });
+    if (new Set(passengers.map((person) => String(person.document).trim().toLowerCase())).size !== count) return NextResponse.json({ error: "Cada pasajero debe tener un documento diferente" }, { status: 400 });
+    const returning = flights.find((f) => f.id === payload.returnFlightId);
+    if (payload.returnFlightId && (!returning || !validReturnFlight(flight, returning) || !["Economy", "Primera"].includes(String(payload.returnCabin)) || !cabinAvailable(returning, payload.returnCabin as Cabin, count))) return NextResponse.json({ error: "Vuelo de vuelta no disponible" }, { status: 400 });
+    const code = `DEMO-${Date.now().toString(36).toUpperCase()}`;
+    return NextResponse.json({ mode: "mock", persisted: false, data: { ...reservation, code, flightId: payload.flightId, cabin: payload.cabin, seats: count, status: "Pendiente de pago", ...(returning ? { returnReservation: { code: `${code}-V`, flightId: returning.id, cabin: payload.returnCabin, seats: count, status: "Pendiente de pago" } } : {}) } }, { status: 202 });
   }
   if (resource === "check-in") {
     if (!payload.reservationCode || !Number.isFinite(Number(payload.baggageKg)) || Number(payload.baggageKg) < 0) return NextResponse.json({ error: "Ingresá reserva y peso válido" }, { status: 400 });
@@ -109,7 +116,8 @@ export async function POST(request: NextRequest, context: Context) {
   }
   if (resource === "payments") {
     if (!payload.reservationCode) return NextResponse.json({ error: "Falta el código de reserva" }, { status: 400 });
-    return NextResponse.json({ mode: "mock", persisted: false, data: { reservationCode: payload.reservationCode, status: "Aprobado (simulado)", invoice: "FAC-DEMO-2026-001" } }, { status: 202 });
+    if (payload.returnReservationCode === payload.reservationCode) return NextResponse.json({ error: "Las reservas de ida y vuelta deben ser diferentes" }, { status: 400 });
+    return NextResponse.json({ mode: "mock", persisted: false, data: { reservationCode: payload.reservationCode, status: "Aprobado (simulado)", invoice: "FAC-DEMO-2026-001", ...(payload.returnReservationCode ? { returnPayment: { reservationCode: payload.returnReservationCode, status: "Aprobado (simulado)", invoice: "FAC-DEMO-2026-002" } } : {}) } }, { status: 202 });
   }
   return NextResponse.json({ mode: "mock", persisted: false, resource, data: { acceptedFields: Object.keys(payload).filter((key) => key !== "password"), status: "Recibido en simulación" } }, { status: 202 });
 }

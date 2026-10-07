@@ -26,6 +26,7 @@ const businessMessages = new Set([
   "Los cupos no pueden ser negativos", "La capacidad excede la numeración de asientos",
   "Seleccioná al menos un día de operación", "El período elegido no incluye los días de operación seleccionados",
   "Asigná al menos un asiento para publicar el vuelo", "Los horarios de salida y llegada deben ser diferentes",
+  "Seleccioná un regreso por la ruta inversa después de la llegada de la ida", "Las reservas de ida y vuelta no son válidas",
 ]);
 
 export function databaseError(error: { code?: string; message: string }): ApiError {

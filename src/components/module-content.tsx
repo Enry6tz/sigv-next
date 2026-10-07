@@ -3,15 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import type { Module } from "@/lib/catalog";
-import type { Flight } from "@/lib/mock-data";
+import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
 import { ActionNotice, type Notice } from "./action-notice";
 import { mutate } from "@/lib/mutations";
-import { displayFlightCode } from "@/lib/flight-code";
+
 
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
-const date = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("es-AR");
 
 function downloadFile(filename: string, contents: string, mime: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: mime }));
@@ -42,55 +41,23 @@ function Status({ value }: { value: string }) {
   return <span className={`status ${value === "Cancelado" ? "danger" : value === "Retrasado" ? "warning" : "ok"}`}><span aria-hidden="true">●</span>{value}</span>;
 }
 
-function FlightTable({ flights, admin, sprint, live = false }: { flights: Flight[]; admin?: boolean; sprint: number; live?: boolean }) {
-  return <><div className="table-wrap"><table><thead><tr><th>Vuelo</th><th>Ruta</th><th>Salida</th><th>Tarifas desde</th><th>Disponibilidad</th><th>Estado</th><th></th></tr></thead><tbody>{flights.map((flight) => <tr key={flight.id}><td><strong>{displayFlightCode(flight)}</strong><small>{date(flight.date)}</small></td><td><strong>{flight.origin} → {flight.destination}</strong><small>Aerolínea nacional</small></td><td>{flight.departure}<small>Llegada {flight.arrival}</small></td><td>{money(flight.economy)}<small>Primera {money(flight.first)}</small></td><td>{flight.seatsEconomy + flight.seatsFirst} lugares</td><td><Status value={flight.status} /></td><td>{admin ? <span className="muted">{live ? "Gestionar abajo" : sprint >= 2 ? "Editar · Cancelar" : "Ver detalle"}</span> : sprint >= 2 ? <Link className="inline-action" href={`/pasajero/compra?flight=${flight.id}`}>Elegir →</Link> : <span className="muted">Compra en S2</span>}</td></tr>)}</tbody></table></div><div className="flight-mobile-list">{flights.map((flight) => <article className="flight-mobile-card" key={flight.id}><div className="flight-mobile-head"><span>{displayFlightCode(flight)} · {date(flight.date)}</span><Status value={flight.status} /></div><div className="flight-times"><div><strong>{flight.departure}</strong><small>{flight.origin}</small></div><span>────── ✈ ──────</span><div><strong>{flight.arrival}</strong><small>{flight.destination}</small></div></div><div className="flight-mobile-foot"><div><small>DESDE · ECONOMY</small><strong>{money(flight.economy)}</strong><small>Primera {money(flight.first)}</small></div>{admin ? <span className="muted">{flight.seatsEconomy + flight.seatsFirst} lugares</span> : sprint >= 2 ? <Link className="button dark small" href={`/pasajero/compra?flight=${flight.id}`}>Elegir →</Link> : <span className="muted">Compra en S2</span>}</div></article>)}</div>{flights.length === 0 && <div className="empty-inline">No hay vuelos para esa búsqueda. Probá con otra ruta o fecha.</div>}</>;
-}
-
-function SearchFlights({ sprint, initialQuery, live }: { sprint: number; initialQuery: { origin: string; destination: string; date: string }; live: boolean }) {
-  const { data, error } = useMock<Flight[]>("flights");
-  const [origin, setOrigin] = useState(initialQuery.origin);
-  const [destination, setDestination] = useState(initialQuery.destination);
-  const [travelDate, setTravelDate] = useState(initialQuery.date);
-  const [searched, setSearched] = useState(false);
-  const filtered = (data ?? []).filter((f) => (!origin || f.origin === origin) && (!destination || f.destination === destination) && (!travelDate || f.date === travelDate));
-  return <>
-    <section className="panel search-panel"><div className="panel-title"><div><p className="kicker">CONSULTA DE DISPONIBILIDAD</p><h2>Encontrá tu próximo vuelo</h2></div><span className="subtle-count">{data?.length ?? "—"} vuelos {live ? "en línea" : "de prueba"}</span></div>
-      <form className="filter-grid" onSubmit={(event) => { event.preventDefault(); setSearched(true); }}><label>Origen<select value={origin} onChange={(e) => setOrigin(e.target.value)}><option value="">Todos</option><option value="EZE">Buenos Aires (EZE)</option><option value="AEP">Buenos Aires (AEP)</option><option value="COR">Córdoba (COR)</option></select></label><label>Destino<select value={destination} onChange={(e) => setDestination(e.target.value)}><option value="">Todos</option><option value="BRC">Bariloche (BRC)</option><option value="MDZ">Mendoza (MDZ)</option><option value="SCL">Santiago (SCL)</option><option value="USH">Ushuaia (USH)</option><option value="EZE">Buenos Aires (EZE)</option></select></label><label>Fecha de ida<input type="date" value={travelDate} onChange={(e) => setTravelDate(e.target.value)} /></label><button className="button dark" type="submit">Buscar vuelos</button></form>
-    </section>
-    <section className="panel"><div className="panel-title"><div><p className="kicker">RESULTADOS</p><h2>Vuelos disponibles</h2></div><span className="subtle-count">{filtered.length} resultados</span></div>{error ? <p role="alert" className="error-text">{error}</p> : !data ? <p role="status">Cargando vuelos…</p> : <FlightTable flights={filtered} sprint={sprint} live={live} />}{searched && <p role="status" className="form-hint">Resultados actualizados para los filtros seleccionados.</p>}</section>
-  </>;
-}
-
-type ReservationResult = { code: string; flightId: string; cabin: string; seats: number; status: string };
-
-function Booking({ initialFlight, live }: { initialFlight?: string; live: boolean }) {
-  const { data: flights } = useMock<Flight[]>("flights");
-  const [count, setCount] = useState(1);
-  const [cabin, setCabin] = useState("Economy");
-  const [flightId, setFlightId] = useState(initialFlight ?? "AR-1420");
-  const [result, setResult] = useState<ReservationResult | null>(null);
-  const [error, setError] = useState("");
-  const flight = flights?.find((f) => f.id === flightId);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setError(""); setResult(null);
-    const form = new FormData(event.currentTarget);
-    const passengers = Array.from({ length: count }, (_, index) => ({ firstName: form.get(`firstName${index}`), lastName: form.get(`lastName${index}`), document: form.get(`document${index}`) }));
-    const result = await mutate("reservations", "POST", { flightId, cabin, passengerCount: count, passengers });
-    if (result.ok) setResult(result.data); else setError(result.error);
-  }
-  return <div className="two-column"><section className="panel"><p className="kicker">PASO 1 DE 2</p><h2>Datos de la reserva</h2><form className="stack-form" onSubmit={submit}><label>Vuelo<select value={flightId} onChange={(e) => setFlightId(e.target.value)}>{flights?.map((f) => <option key={f.id} value={f.id}>{displayFlightCode(f)} · {date(f.date)} · {f.origin} → {f.destination}</option>)}</select></label><div className="form-row"><label>Cabina<select value={cabin} onChange={(e) => setCabin(e.target.value)}><option>Economy</option><option>Primera</option></select></label><label>Pasajeros<select value={count} onChange={(e) => setCount(Number(e.target.value))}>{Array.from({ length: 9 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select></label></div>{Array.from({ length: count }, (_, index) => <fieldset key={index}><legend>Pasajero {index + 1}</legend><div className="form-row"><label>Nombre<input name={`firstName${index}`} required /></label><label>Apellido<input name={`lastName${index}`} required /></label></div><label>DNI / documento<input name={`document${index}`} required /></label></fieldset>)}<button className="button dark" type="submit">Continuar con la reserva</button></form>{error && <p role="alert" className="error-text">{error}</p>}{result && <div className="success-box" role="status"><strong>{live ? "Reserva creada" : "Reserva simulada"}: {result.code}</strong><p>{result.seats} pasajero(s) · {result.cabin}. {live ? "Los cupos quedaron reservados en Supabase." : "Esta reserva no se guarda al reiniciar."}</p><Link className="button dark small" href={`/pasajero/pago?reservation=${result.code}`}>Ir al pago de prueba →</Link></div>}</section><aside className="panel summary-panel"><p className="kicker">TU SELECCIÓN</p><h2>{flight?.origin ?? "EZE"} → {flight?.destination ?? "BRC"}</h2><p>{flight ? `${date(flight.date)} · ${flight.departure} a ${flight.arrival}` : "Cargando horario…"}</p><div className="summary-total"><span>Precio estimado</span><strong>{money(((cabin === "Economy" ? flight?.economy : flight?.first) ?? 0) * count)}</strong></div><p className="form-hint">{live ? "La disponibilidad se confirma al crear la reserva." : "Tarifas ficticias para revisar el recorrido."}</p></aside></div>;
-}
-
-function Payment({ reservationCode, live }: { reservationCode: string; live: boolean }) {
+function Payment({ reservationCode, returnReservation, live }: { reservationCode: string; returnReservation?: string; live: boolean }) {
   const [message, setMessage] = useState<Notice>(null);
+  const [busy, setBusy] = useState(false);
+  const [paid, setPaid] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy || paid) return;
+    setBusy(true);
     const data = Object.fromEntries(new FormData(event.currentTarget));
+    if (returnReservation) data.returnReservationCode = returnReservation;
     setMessage(null);
     const result = await mutate("payments", "POST", data);
-    setMessage({ ok: result.ok, text: result.ok ? `Pago de prueba aprobado · comprobante ${result.data.invoice}. ${live ? "Pago registrado." : "No se guardaron datos."} No se procesó dinero.` : result.error });
+    setPaid(result.ok);
+    setBusy(false);
+    setMessage({ ok: result.ok, text: result.ok ? `Pago de prueba aprobado · comprobante ${result.data.invoice}${result.data.returnPayment ? ` · Vuelta ${result.data.returnPayment.invoice}` : ""}. ${live ? "Pago registrado." : "No se guardaron datos."} No se procesó dinero.` : result.error });
   }
-  return <div className="two-column"><section className="panel"><p className="kicker">PASO 2 DE 2</p><h2>Pago de prueba</h2><form className="stack-form" onSubmit={submit}><label>Código de reserva<input name="reservationCode" placeholder="DEMO-..." defaultValue={reservationCode} required /></label><label>Método de pago<select name="method"><option>Tarjeta de prueba</option><option>Transferencia de prueba</option></select></label><button className="button dark">Simular pago</button></form><ActionNotice notice={message} /></section><aside className="panel summary-panel"><h2>Sin cobros reales</h2><p>El endpoint devuelve una aprobación ficticia para revisar la pantalla y el contrato de respuesta.</p></aside></div>;
+  return <div className="two-column"><section className="panel"><p className="kicker">PASO 2 DE 2</p><h2>Pago de prueba</h2><form className="stack-form" onSubmit={submit}><label>Código de reserva de ida<input name="reservationCode" placeholder="SIGV-..." defaultValue={reservationCode} readOnly={Boolean(returnReservation)} required /></label>{returnReservation && <label>Código de reserva de vuelta<input value={returnReservation} readOnly /></label>}<label>Método de pago<select name="method"><option>Tarjeta de prueba</option><option>Transferencia de prueba</option></select></label><button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : paid ? "Pago aprobado" : "Simular pago"}</button></form><ActionNotice notice={message} />{paid && <div className="action-row"><Link className="button small" href="/pasajero/mis-reservas">Ver mis reservas</Link><Link className="button small" href="/pasajero/buscar-vuelos">Buscar otro vuelo</Link></div>}</section><aside className="panel summary-panel"><h2>Sin cobros reales</h2><p>El pago de prueba confirma {returnReservation ? "los dos tramos de tu viaje" : "tu reserva"}. No se procesa dinero.</p></aside></div>;
 }
 
 function CheckIn({ live }: { live: boolean }) {
@@ -147,15 +114,15 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
 }
 
 function Reservations({ live }: { live: boolean }) {
-  const { data, error, refresh } = useMock<{ code: string; flightId: string; passenger: string; cabin: string; seats: number; status: string; amount: number; passengers?: { checked_in_at: string | null }[] }[]>("reservations");
+  const { data, error, refresh } = useMock<{ code: string; flightId: string; passenger: string; cabin: string; seats: number; status: string; amount: number; returnReservationCode?: string; passengers?: { checked_in_at: string | null }[] }[]>("reservations");
   const [message, setMessage] = useState<Notice>(null);
-  async function cancel(code: string) {
+  async function cancel(code: string, roundTrip: boolean) {
     setMessage(null);
     const result = await mutate("reservations", "DELETE", { reservationCode: code });
-    setMessage({ ok: result.ok, text: result.ok ? "Reserva cancelada y cupos liberados." : result.error });
+    setMessage({ ok: result.ok, text: result.ok ? (roundTrip ? "Viaje de ida y vuelta cancelado y cupos liberados." : "Reserva cancelada y cupos liberados.") : result.error });
     if (result.ok) refresh();
   }
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS VIAJES</p><h2>Reservas</h2></div><span className="subtle-count">{data?.length ?? "—"} reservas</span></div>{error && <p className="error-text" role="alert">{error}</p>}{!data && !error && <p role="status">Cargando reservas…</p>}{data?.length === 0 && <p className="empty-inline">Todavía no tenés reservas.</p>}<div className="record-grid">{data?.map((row) => <article className="record-card" key={row.code}><strong>{row.code}</strong><p>{row.flightId} · {row.passenger}</p><p>{row.seats} pasaje(s) · {row.cabin} · {money(row.amount)}</p><p><Status value={row.status} /></p><div className="action-row">{row.status === "Pendiente de pago" && <Link className="button small" href={`/pasajero/pago?reservation=${row.code}`}>Pagar prueba</Link>}{live && row.status !== "Cancelada" && !row.passengers?.some((person) => person.checked_in_at) && <button className="button small" type="button" onClick={() => cancel(row.code)}>Cancelar</button>}{row.passengers?.some((person) => person.checked_in_at) && <span className="muted">Check-in realizado</span>}</div></article>)}</div><ActionNotice notice={message} /></section>;
+  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS VIAJES</p><h2>Reservas</h2></div><span className="subtle-count">{data?.length ?? "—"} reservas</span></div>{error && <p className="error-text" role="alert">{error}</p>}{!data && !error && <p role="status">Cargando reservas…</p>}{data?.length === 0 && <p className="empty-inline">Todavía no tenés reservas.</p>}<div className="record-grid">{data?.map((row) => <article className="record-card" key={row.code}><strong>{row.code}</strong><p>{row.flightId} · {row.passenger}</p><p>{row.seats} pasaje(s) · {row.cabin} · {money(row.amount)}</p>{row.returnReservationCode && <p>Ida y vuelta · Reserva vinculada {row.returnReservationCode}</p>}<p><Status value={row.status} /></p><div className="action-row">{row.status === "Pendiente de pago" && <Link className="button small" href={`/pasajero/pago?${new URLSearchParams({ reservation: row.code, ...(row.returnReservationCode ? { returnReservation: row.returnReservationCode } : {}) })}`}>Pagar prueba</Link>}{live && row.status !== "Cancelada" && !row.passengers?.some((person) => person.checked_in_at) && <button className="button small" type="button" onClick={() => cancel(row.code, Boolean(row.returnReservationCode))}>{row.returnReservationCode ? "Cancelar viaje completo" : "Cancelar"}</button>}{row.passengers?.some((person) => person.checked_in_at) && <span className="muted">Check-in realizado</span>}</div></article>)}</div><ActionNotice notice={message} /></section>;
 }
 
 function Profile({ live }: { live: boolean }) {
@@ -208,12 +175,12 @@ function Dashboard({ module, sprint, live }: { module: Module; sprint: number; l
   return <><div className="welcome-banner"><div><p className="kicker light">BIENVENIDO A SIGV</p><h2>{role === "admin" ? "Operación aérea, en un solo panel." : role === "mostrador" ? "Cada embarque, bajo control." : "Tu próximo destino está más cerca."}</h2><p>{live ? "Consultá la operación con datos del proyecto SIGV." : "Revisá los flujos de la aerolínea con información de prueba."}</p></div><span aria-hidden="true">✈</span></div><div className="metrics"><div><span>Vuelos programados</span><strong>{data?.flights ?? "—"}</strong></div><div><span>Vuelos activos</span><strong>{data?.activeFlights ?? "—"}</strong></div><div><span>Reservas</span><strong>{data?.reservations ?? "—"}</strong></div></div><section className="panel"><p className="kicker">ACCESOS RÁPIDOS</p><h2>Continuar</h2><div className="shortcut-grid">{actions.map((action) => <Link href={action.href} key={action.href}>{action.label}<span>→</span></Link>)}</div></section></>;
 }
 
-export function ModuleContent({ module, sprint, initialFlight, initialQuery, live }: { module: Module; sprint: number; initialFlight?: string; initialQuery: { origin: string; destination: string; date: string; reservation: string }; live: boolean }) {
+export function ModuleContent({ module, sprint, initialFlight, initialQuery, live }: { module: Module; sprint: number; initialFlight?: string; initialQuery: BookingQuery & { origin: string; destination: string; date: string; reservation: string; returnReservation?: string }; live: boolean }) {
   if (module.slug === "inicio") return <Dashboard module={module} sprint={sprint} live={live} />;
-  if (module.role === "pasajero" && module.slug === "buscar-vuelos") return <SearchFlights sprint={sprint} initialQuery={initialQuery} live={live} />;
+
   if (module.role === "admin" && module.slug === "vuelos") return <AdminFlights live={live} />;
-  if (module.slug === "compra") return <Booking initialFlight={initialFlight} live={live} />;
-  if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} live={live} />;
+  if (module.slug === "compra") return <PassengerBooking key={JSON.stringify([initialFlight, initialQuery])} initialFlight={initialFlight} initialQuery={initialQuery} live={live} />;
+  if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} returnReservation={initialQuery.returnReservation} live={live} />;
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
