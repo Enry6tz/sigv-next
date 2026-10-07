@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import type { Flight } from "@/lib/mock-data";
 import { displayFlightCode } from "@/lib/flight-code";
+import { findModule } from "@/lib/catalog";
 import { bookingHref, cabinAvailable, durationMinutes, parsePassengerCount, searchFlights, stopsLabel, validReturnFlight, type Cabin, type FlightSort, type PassengerQuery } from "@/lib/passenger-search";
 
 type Airport = { code: string; city: string };
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
 
 export function PassengerSearch({ initialQuery, sprint }: { initialQuery: PassengerQuery; sprint: number }) {
+  const purchaseEnabled = sprint >= findModule("pasajero", "compra")!.sprint;
   const [airports, setAirports] = useState<Airport[]>([]);
   const [flights, setFlights] = useState<Flight[] | null>(null);
   const [error, setError] = useState("");
@@ -125,8 +127,8 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
                   <span className="passenger-fare-benefits">{flight.baggageIncluded && <span>Equipaje incluido</span>}{flight.seatSelectionEnabled && <span>Selección de asiento</span>}{flight.onlineCheckInEnabled && <span>Check-in online</span>}</span>
                 </button>;
               })}
-              <div className="passenger-flight-action">{sprint < 2 ? <span className="muted">Compra próximamente</span> : selected ? proceed : <button className="button small" type="button" onClick={() => setSelection({ flight: flight.id, cabin: cabinAvailable(flight, "Economy", passengers) ? "Economy" : "Primera" })}>Seleccionar</button>}</div>
-              <div className="passenger-mobile-flight-footer"><div><small>{selected ? "tarifa elegida" : "desde"}</small><strong>{money(mobileCabin === "Economy" ? flight.economy : flight.first)}</strong><small>por persona · {mobileCabin === "Economy" ? "economy" : "primera clase"}</small></div>{sprint < 2 ? <span>Compra próximamente</span> : selected ? proceed : <button className="button small" type="button" aria-expanded={expandedFlight === flight.id} onClick={() => setExpandedFlight(expandedFlight === flight.id ? null : flight.id)}>{expandedFlight === flight.id ? "Ocultar clases" : index === 0 ? "Elegir →" : "Ver clases"}</button>}</div>
+              <div className="passenger-flight-action">{!purchaseEnabled ? <span className="muted">Compra próximamente</span> : selected ? proceed : <button className="button small" type="button" onClick={() => setSelection({ flight: flight.id, cabin: cabinAvailable(flight, "Economy", passengers) ? "Economy" : "Primera" })}>Seleccionar</button>}</div>
+              <div className="passenger-mobile-flight-footer"><div><small>{selected ? "tarifa elegida" : "desde"}</small><strong>{money(mobileCabin === "Economy" ? flight.economy : flight.first)}</strong><small>por persona · {mobileCabin === "Economy" ? "economy" : "primera clase"}</small></div>{!purchaseEnabled ? <span>Compra próximamente</span> : selected ? proceed : <button className="button small" type="button" aria-expanded={expandedFlight === flight.id} onClick={() => setExpandedFlight(expandedFlight === flight.id ? null : flight.id)}>{expandedFlight === flight.id ? "Ocultar clases" : index === 0 ? "Elegir →" : "Ver clases"}</button>}</div>
             </article>;
           })}</div>
         </>}

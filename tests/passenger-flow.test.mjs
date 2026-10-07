@@ -9,6 +9,19 @@ async function post(resource, payload) {
 }
 const people = [{ firstName: "Prueba", lastName: "Uno", document: "QA-FLOW-1" }, { firstName: "Prueba", lastName: "Dos", document: "QA-FLOW-2" }];
 
+test("el flujo de compra abre sus pantallas y recursos desde Sprint 1", integration, async () => {
+  const health = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(health.provider, "mock", "No ejecutar esta prueba contra datos reales");
+  for (const path of ["/pasajero/compra?flight=AR-1420", "/pasajero/pago", "/pasajero/mis-reservas", "/pasajero/facturas", "/api/data/reservations", "/api/data/payments", "/api/data/invoices"]) {
+    assert.equal((await fetch(`${base}${path}`)).status, 200, path);
+  }
+  if (health.sprint === 1) {
+    for (const path of ["/mostrador/check-in", "/api/data/check-in", "/api/data/seats", "/pasajero/tickets"]) {
+      assert.equal((await fetch(`${base}${path}`)).status, 404, path);
+    }
+  }
+});
+
 test("búsqueda pública y portal muestran el mismo buscador sin barra lateral", integration, async () => {
   const health = await (await fetch(`${base}/api/health`)).json();
   assert.equal(health.provider, "mock", "Esta prueba solo crea datos simulados");

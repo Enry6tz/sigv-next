@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
-import type { Module } from "@/lib/catalog";
+import { findModule, type Module } from "@/lib/catalog";
 import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
@@ -171,7 +171,7 @@ function Reports({ live }: { live: boolean }) {
 function Dashboard({ module, sprint, live }: { module: Module; sprint: number; live: boolean }) {
   const { data } = useMock<Record<string, number>>("dashboard");
   const role = module.role;
-  const actions = role === "admin" ? [{ label: "Ver vuelos", href: "/admin/vuelos" }, { label: "Capacidades", href: "/admin/capacidades" }, { label: "Tarifas", href: "/admin/tarifas" }] : role === "mostrador" ? [{ label: "Manifiesto", href: "/mostrador/manifiesto" }, { label: "Hacer check-in", href: "/mostrador/check-in" }] : [{ label: "Buscar vuelos", href: "/pasajero/buscar-vuelos" }, { label: "Mi perfil", href: "/pasajero/perfil" }, ...(sprint >= 2 ? [{ label: "Mis reservas", href: "/pasajero/mis-reservas" }] : [])];
+  const actions = role === "admin" ? [{ label: "Ver vuelos", href: "/admin/vuelos" }, { label: "Capacidades", href: "/admin/capacidades" }, { label: "Tarifas", href: "/admin/tarifas" }] : role === "mostrador" ? [{ label: "Manifiesto", href: "/mostrador/manifiesto" }, { label: "Hacer check-in", href: "/mostrador/check-in" }] : [{ label: "Buscar vuelos", href: "/pasajero/buscar-vuelos" }, { label: "Mi perfil", href: "/pasajero/perfil" }, ...(sprint >= findModule("pasajero", "mis-reservas")!.sprint ? [{ label: "Mis reservas", href: "/pasajero/mis-reservas" }] : [])];
   return <><div className="welcome-banner"><div><p className="kicker light">BIENVENIDO A SIGV</p><h2>{role === "admin" ? "Operación aérea, en un solo panel." : role === "mostrador" ? "Cada embarque, bajo control." : "Tu próximo destino está más cerca."}</h2><p>{live ? "Consultá la operación con datos del proyecto SIGV." : "Revisá los flujos de la aerolínea con información de prueba."}</p></div><span aria-hidden="true">✈</span></div><div className="metrics"><div><span>Vuelos programados</span><strong>{data?.flights ?? "—"}</strong></div><div><span>Vuelos activos</span><strong>{data?.activeFlights ?? "—"}</strong></div><div><span>Reservas</span><strong>{data?.reservations ?? "—"}</strong></div></div><section className="panel"><p className="kicker">ACCESOS RÁPIDOS</p><h2>Continuar</h2><div className="shortcut-grid">{actions.map((action) => <Link href={action.href} key={action.href}>{action.label}<span>→</span></Link>)}</div></section></>;
 }
 
