@@ -14,6 +14,8 @@ Las tres ramas comparten el código completo y se despliegan en el proyecto Verc
 
 Sprint 1 y Sprint 2 usan URLs estables de rama de Preview, que apuntan al último despliegue de su rama. Vercel puede solicitar iniciar sesión para acceder a esos previews. Sprint 3 usa la URL de producción. Todas las versiones usan `DATA_PROVIDER=supabase` y las variables de conexión de Supabase en su entorno. Los retornos de confirmación de correo requieren permitir el callback de cada entorno en Supabase Auth.
 
+La rama `sprint-1` permite probar la compra completa con `APP_SPRINT=1`: selección de vuelo y cabina, reserva, pago de prueba, mis reservas y comprobantes. El pago sigue siendo simulado; con Supabase, las reservas se guardan y requieren una sesión de pasajero.
+
 ## Puesta en marcha
 
 1. Ejecutar npm ci.
