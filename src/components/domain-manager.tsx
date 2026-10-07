@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { ActionNotice, type Notice } from "./action-notice";
+import { mutate } from "@/lib/mutations";
 
 type DomainResource = "aircraft" | "schedules" | "frequencies" | "configurations" | "seats";
 type Row = Record<string, string | number | null>;
@@ -17,7 +19,8 @@ export function DomainManager({ resource, canEdit }: { resource: DomainResource;
   const [schedules, setSchedules] = useState<Row[]>([]);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<Notice>(null);
+  const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [editing, setEditing] = useState<Row | null>(null);
   const [creating, setCreating] = useState(false);
@@ -44,11 +47,13 @@ export function DomainManager({ resource, canEdit }: { resource: DomainResource;
   }, [resource, canEdit, revision]);
 
   async function send(method: "POST" | "PATCH" | "DELETE", payload: Record<string, unknown>) {
-    const response = await fetch(`/api/data/${resource}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    const body = await response.json();
-    setMessage(response.ok ? resource === "schedules" && payload.action === "generate"
-      ? `${body.data.created} vuelos generados.` : "Cambios guardados en Supabase." : body.error ?? "No se pudo guardar");
-    if (response.ok) { setEditing(null); setCreating(false); setGenerating(null); setRevision((value) => value + 1); }
+    if (busy) return;
+    setBusy(true); setMessage(null);
+    const result = await mutate(resource, method, payload);
+    setMessage({ ok: result.ok, text: result.ok ? resource === "schedules" && payload.action === "generate"
+      ? `${result.data.created} vuelos generados correctamente.` : "Cambios guardados correctamente." : result.error });
+    if (result.ok) { setEditing(null); setCreating(false); setGenerating(null); setRevision((value) => value + 1); }
+    setBusy(false);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -101,6 +106,6 @@ export function DomainManager({ resource, canEdit }: { resource: DomainResource;
     </article>)}</div>
     {(editing || creating) && resource !== "seats" && <form className="stack-form inline-form" onSubmit={submit} key={`${resource}-${String(editing?.id ?? editing?.scheduleId ?? "new")}`}><h3>{creating ? "Nuevo registro" : "Editar registro"}</h3>{formFields()}<div className="action-row"><button className="button dark" type="submit">Guardar</button><button className="button" type="button" onClick={() => { setEditing(null); setCreating(false); }}>Cerrar</button></div></form>}
     {generating && <form className="stack-form inline-form" onSubmit={(event) => { event.preventDefault(); void send("POST", { action: "generate", scheduleId: generating.id, ...Object.fromEntries(new FormData(event.currentTarget)) }); }}><h3>Generar vuelos de {generating.code}</h3><div className="form-row"><label>Desde<input type="date" name="from" defaultValue={String(generating.saleStart)} required /></label><label>Hasta<input type="date" name="to" defaultValue={String(generating.saleEnd)} required /></label></div><div className="action-row"><button className="button dark" type="submit">Generar</button><button className="button" type="button" onClick={() => setGenerating(null)}>Cerrar</button></div></form>}
-    {message && <p role="status" className="form-status">{message}</p>}
+    <ActionNotice notice={message} />
   </section>;
 }
