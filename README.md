@@ -44,4 +44,14 @@ Las migraciones incluyen aeropuertos, aviones, programaciones y frecuencias, con
 
 El pago es intencionalmente simulado: confirma la reserva y crea un comprobante de prueba, sin cargo real. Los avisos se guardan en la aplicación; falta correo comercial saliente. Los tickets pueden descargarse como copia autónoma para abrir sin conexión, pero esa copia no se sincroniza automáticamente; tampoco hay app móvil nativa. Ver docs/COBERTURA.md, docs/ENDPOINTS.md y docs/VALIDACION.md antes de usar esta base en producción.
 
+### Alta completa de vuelos
+
+El botón Crear vuelo de `/admin/vuelos` (también accesible desde `/admin/vuelo`) reúne datos operativos, aeronave, frecuencia semanal, período de venta, asientos y tarifas por clase, y notas de tarifa. La duración se calcula desde los horarios; una llegada anterior a la salida se interpreta como llegada al día siguiente. Los días de operación se aplican a las fechas dentro del período elegido, igual que en el generador de programaciones existente.
+
+Aplicar `supabase/migrations/20261006_publish_flight_schedule.sql` después de las migraciones anteriores para habilitar el guardado. La función `sigv_publish_flight_schedule` valida el rol administrador y publica la programación, frecuencias, clases y vuelos en una sola transacción. Las notas se guardan en la programación y se copian a los vuelos generados. Estas opciones describen la tarifa; esta alta no implementa un nuevo flujo de check-in online ni de selección de asiento web.
+
+Las capacidades se limitan por clase a las de la aeronave elegida y a la numeración actual de asientos (582 Economy y 12 Primera). El ejemplo de 18 asientos en Primera del wireframe requiere ampliar previamente ese modelo, que actualmente reserva las filas 1–2 para Primera y empieza Economy en la fila 3.
+
+`npm test` comprueba duración, frecuencia, validaciones del alta y traducción de errores. Los detalles de fallos de base de datos se registran en el servidor; la API devuelve mensajes de negocio o un error general sin exponer tablas, restricciones o configuración.
+
 Fuentes: ../User stories.docx, ../Requerimientos de alto nivel.docx, ../wireframes/ y ../modelo de datos/. La guía Recomendaciones-Nextjs-Supabase-Prisma corresponde a otro producto y se usó solo para criterios de estructura; la especificación funcional es SIGV.

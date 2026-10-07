@@ -50,7 +50,7 @@ export const modules: Module[] = [
 ];
 
 export const resourceSprint: Record<string, 1 | 2 | 3> = {
-  dashboard: 1, flights: 1, airports: 1, capacities: 1, fares: 1,
+  dashboard: 1, flights: 1, "admin-flights": 1, airports: 1, capacities: 1, fares: 1,
   aircraft: 1, schedules: 1, frequencies: 1, configurations: 1,
   users: 1, profile: 1, auth: 1, reservations: 2, payments: 2,
   invoices: 2, seats: 2,

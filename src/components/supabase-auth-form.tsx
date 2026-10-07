@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { safeNextPath } from "@/lib/auth-navigation";
 
 export function SupabaseAuthForm({ mode, nextPath }: { mode: "signin" | "signup"; nextPath?: string }) {
   const [error, setError] = useState("");
@@ -30,12 +31,12 @@ export function SupabaseAuthForm({ mode, nextPath }: { mode: "signin" | "signup"
           email, password,
           options: {
             data: { first_name: firstName, last_name: lastName, document, phone },
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            emailRedirectTo: `${window.location.origin}/auth/callback${safeNextPath(nextPath) ? `?${new URLSearchParams({ next: safeNextPath(nextPath)! })}` : ""}`,
           },
         });
         if (authError) throw authError;
         if (data.session) {
-          router.push("/pasajero/inicio");
+          router.push(safeNextPath(nextPath) || "/pasajero/buscar-vuelos");
           router.refresh();
         } else {
           setMessage("Cuenta creada. Revisá tu correo para confirmar el acceso.");
@@ -45,7 +46,7 @@ export function SupabaseAuthForm({ mode, nextPath }: { mode: "signin" | "signup"
         if (authError) throw authError;
         const { data: role } = await supabase.rpc("sigv_role");
         const home = role === "admin" ? "/admin/inicio" : role === "mostrador" ? "/mostrador/inicio" : "/pasajero/inicio";
-        router.push(nextPath?.startsWith("/") && !nextPath.startsWith("//") ? nextPath : home);
+        router.push(safeNextPath(nextPath) || home);
         router.refresh();
       }
     } catch (reason) {
