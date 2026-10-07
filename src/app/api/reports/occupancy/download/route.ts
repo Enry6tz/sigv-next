@@ -1,5 +1,6 @@
 import { appSprint, dataProvider } from "@/lib/sprint";
-import { ApiError, readResource } from "@/lib/supabase/resources";
+import { readResource } from "@/lib/supabase/resources";
+import { publicError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ export async function GET() {
     const csv = "Vuelo,Clase,Ocupación (%)\r\n" + rows.map((row) => [cell(row.flightId), cell(row.cabin), row.occupancy].join(",")).join("\r\n");
     return new Response(`\uFEFF${csv}`, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=SIGV-ocupacion.csv", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
   } catch (error) {
-    return new Response(error instanceof Error ? error.message : "No se pudo exportar", { status: error instanceof ApiError ? error.status : 500 });
+    const { message, status } = publicError(error);
+    return new Response(message, { status });
   }
 }

@@ -1,12 +1,11 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "./server";
-
-export class ApiError extends Error {
-  constructor(message: string, public status = 400) {
-    super(message);
-  }
-}
+import { ApiError, databaseError } from "@/lib/api-errors";
+import { validateFlightSchedule } from "@/lib/flight-schedule";
+import { displayFlightCode } from "@/lib/flight-code";
+import { adminFlightDto } from "@/lib/admin-flights";
+export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
 type Json = Record<string, unknown>;
@@ -29,19 +28,27 @@ async function requireRole(client: Client, roles: string[]) {
   return data as string;
 }
 
-function unwrap<T>(result: { data: T | null; error: { message: string } | null }): T {
-  if (result.error) throw new ApiError(result.error.message);
+function unwrap<T>(result: { data: T | null; error: { code?: string; message: string } | null }): T {
+  if (result.error) {
+    console.error("Data operation failed", result.error);
+    throw databaseError(result.error);
+  }
   return result.data as T;
 }
 
 function flightDto(row: Json) {
   return {
     id: row.id, origin: row.origin, destination: row.destination,
+    code: displayFlightCode({ id: String(row.id), scheduleId: typeof row.schedule_id === "string" ? row.schedule_id : null }),
     date: row.flight_date, departure: String(row.departure).slice(0, 5),
     arrival: String(row.arrival).slice(0, 5), status: row.status,
     economy: Number(row.economy), first: Number(row.first),
     seatsEconomy: row.seats_economy, seatsFirst: row.seats_first,
     isDemo: row.is_demo, archivedAt: row.archived_at,
+    baggageIncluded: row.baggage_included, seatSelectionEnabled: row.seat_selection_enabled,
+    onlineCheckInEnabled: row.online_check_in_enabled,
+    stops: Array.isArray(row.stops) ? row.stops : [],
+    ...(typeof row.duration_minutes === "number" ? { durationMinutes: row.duration_minutes } : {}),
   };
 }
 
@@ -61,12 +68,13 @@ async function flights(client: Client, filters?: URLSearchParams) {
 async function reservations(client: Client) {
   await requireUser(client);
   const rows = unwrap(await client.from("reservations")
-    .select("id,code,flight_id,cabin,passenger_count,total_amount,status,created_at,reservation_passengers(id,first_name,last_name,document,seat,baggage_kg,checked_in_at)")
+    .select("id,code,flight_id,cabin,passenger_count,total_amount,status,created_at,round_trip_id,reservation_passengers(id,first_name,last_name,document,seat,baggage_kg,checked_in_at)")
     .order("created_at", { ascending: false }));
   return rows.map((row: Json) => {
     const people = row.reservation_passengers as Json[];
     return {
       code: row.code, flightId: row.flight_id, cabin: row.cabin,
+      returnReservationCode: row.round_trip_id ? rows.find((other: Json) => other.round_trip_id === row.round_trip_id && other.code !== row.code)?.code : undefined,
       seats: row.passenger_count, status: row.status, amount: Number(row.total_amount),
       passenger: people[0] ? `${people[0].first_name} ${people[0].last_name}` : "",
       document: people[0]?.document ?? "", passengers: people,
@@ -77,6 +85,13 @@ async function reservations(client: Client) {
 export async function readResource(resource: string, filters: URLSearchParams) {
   const client = await createClient();
   if (resource === "flights") return flights(client, filters);
+  if (resource === "admin-flights") {
+    await requireRole(client, ["admin"]);
+    const rows = unwrap(await client.from("flight_schedules")
+      .select("*,aircraft(model),schedule_frequencies(weekday),schedule_configurations(cabin,capacity,price)")
+      .is("archived_at", null).order("code"));
+    return rows.map((row: Json) => adminFlightDto(row));
+  }
   if (resource === "airports") {
     let query = client.from("airports").select("*").order("code");
     if (filters.get("includeArchived") === "1") await requireRole(client, ["admin"]);
@@ -221,6 +236,28 @@ function positiveNumber(value: unknown, label: string) {
 
 export async function writeResource(resource: string, method: "POST" | "PATCH" | "DELETE", payload: Json) {
   const client = await createClient();
+  if (resource === "admin-flights" && ["PATCH", "DELETE"].includes(method)) {
+    await requireRole(client, ["admin"]);
+    if (!text(payload.id)) throw new ApiError("Falta la programación del vuelo");
+    if (method === "PATCH" && payload.action === "fares") {
+      positiveNumber(payload.economy, "Tarifa Economy");
+      positiveNumber(payload.first, "Tarifa Primera");
+    } else if (method === "PATCH" && payload.restore !== true) {
+      const error = validateFlightSchedule(payload);
+      if (error) throw new ApiError(error);
+      if (!["Activa", "Suspendida"].includes(text(payload.status))) throw new ApiError("Seleccioná un estado válido");
+    }
+    return unwrap(await client.rpc("sigv_manage_flight_schedule", {
+      p_schedule_id: text(payload.id), p_action: method === "DELETE" ? "delete" : payload.restore === true ? "restore" : payload.action === "fares" ? "fares" : "update",
+      p_payload: payload,
+    }));
+  }
+  if (resource === "flights" && method === "POST" && payload.action === "publish") {
+    await requireRole(client, ["admin"]);
+    const error = validateFlightSchedule(payload);
+    if (error) throw new ApiError(error);
+    return unwrap(await client.rpc("sigv_publish_flight_schedule", { p_payload: payload }));
+  }
   if (resource === "aircraft" && method === "POST") {
     await requireRole(client, ["admin"]);
     const values = { model: text(payload.model), registration: text(payload.registration).toUpperCase(),
@@ -258,7 +295,12 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "schedules" && ["PATCH", "DELETE"].includes(method)) {
     await requireRole(client, ["admin"]);
-    const updates: Json = method === "DELETE" ? { archived_at: new Date().toISOString() } : {};
+    if (method === "DELETE" || payload.restore === true) {
+      return unwrap(await client.rpc("sigv_manage_flight_schedule", {
+        p_schedule_id: text(payload.id), p_action: method === "DELETE" ? "delete" : "restore", p_payload: {},
+      }));
+    }
+    const updates: Json = {};
     if (method === "PATCH") {
       for (const [from, to] of Object.entries({ origin: "origin", destination: "destination", aircraftId: "aircraft_id",
         departure: "departure", arrival: "arrival", saleStart: "sale_start", saleEnd: "sale_end", status: "status" })) {
@@ -308,6 +350,10 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     const count = Number(payload.passengerCount);
     if (!Array.isArray(passengers) || !Number.isInteger(count) || count < 1 || count > 9 || passengers.length !== count)
       throw new ApiError("La compra admite entre 1 y 9 pasajeros identificados");
+    if (text(payload.returnFlightId)) return unwrap(await client.rpc("sigv_reserve_round_trip", {
+      p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin),
+      p_return_flight_id: text(payload.returnFlightId), p_return_cabin: text(payload.returnCabin), p_passengers: passengers,
+    }));
     return unwrap(await client.rpc("sigv_reserve", { p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin), p_passengers: passengers }));
   }
   if (resource === "reservations" && method === "DELETE") {
@@ -316,6 +362,9 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "payments" && method === "POST") {
     await requireUser(client);
+    if (text(payload.returnReservationCode)) return unwrap(await client.rpc("sigv_demo_round_trip_payment", {
+      p_code: text(payload.reservationCode), p_return_code: text(payload.returnReservationCode), p_method: text(payload.method),
+    }));
     return unwrap(await client.rpc("sigv_demo_payment", { p_code: text(payload.reservationCode), p_method: text(payload.method) }));
   }
   if (resource === "check-in" && method === "POST") {
