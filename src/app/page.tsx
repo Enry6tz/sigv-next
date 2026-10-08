@@ -10,5 +10,5 @@ export default async function Home() {
     const { data } = await client.auth.getClaims();
     signedIn = Boolean(data?.claims?.sub);
   }
-  return <><PassengerHeader signedIn={signedIn} sprint={appSprint} /><main><PassengerSearch initialQuery={{ origin: "", destination: "", date: "" }} sprint={appSprint} /></main></>;
+  return <><PassengerHeader signedIn={signedIn} sprint={appSprint} live={dataProvider === "supabase"} /><main><PassengerSearch initialQuery={{ origin: "", destination: "", date: "" }} sprint={appSprint} /></main></>;
 }

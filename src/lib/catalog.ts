@@ -21,7 +21,7 @@ export type Module = {
 export const modules: Module[] = [
   { slug: "inicio", label: "Inicio", role: "pasajero", sprint: 1, description: "Estado de viaje y accesos a las gestiones del pasajero.", us: "US-009, US-012", rf: "RF-009", resource: "dashboard" },
   { slug: "buscar-vuelos", label: "Buscar vuelos", role: "pasajero", sprint: 1, description: "Consulta por origen, destino y fecha con tarifas por clase.", us: "US-006, US-007", rf: "RF-002", resource: "flights" },
-  { slug: "compra", label: "Comprar pasajes", role: "pasajero", sprint: 1, description: "Selección de clase, hasta nueve pasajes e identificación de pasajeros.", us: "US-015, US-016", rf: "RF-003", resource: "reservations" },
+  { slug: "compra", label: "Comprar pasajes", role: "pasajero", sprint: 1, description: "Selección de clase, hasta nueve pasajes, contacto del comprador e identificación de pasajeros.", us: "US-015, US-016", rf: "RF-003", resource: "reservations" },
   { slug: "pago", label: "Pago de prueba", role: "pasajero", sprint: 1, description: "Pago simulado y emisión de comprobantes de demostración.", us: "—", rf: "RF-004", resource: "payments" },
   { slug: "facturas", label: "Comprobantes", role: "pasajero", sprint: 1, description: "Comprobantes asociados a pagos de prueba.", us: "—", rf: "RF-004", resource: "invoices" },
   { slug: "mis-reservas", label: "Mis reservas", role: "pasajero", sprint: 1, description: "Reservas, pasajes y estados de vuelo.", us: "US-011", rf: "RF-003, RF-011", resource: "reservations" },
@@ -64,6 +64,14 @@ export function roleModules(role: Role, sprint: number) {
 
 export function findModule(role: string, slug: string) {
   return modules.find((module) => module.role === role && module.slug === slug);
+}
+
+// Regla única de acceso a pantallas por rol: el módulo debe existir para ese rol
+// y su sprint mínimo debe estar habilitado. Usada por la página de sección y por tests.
+export function canAccess(role: string, slug: string, sprint: number): boolean {
+  if (!isRole(role)) return false;
+  const target = findModule(role, slug);
+  return target ? target.sprint <= sprint : false;
 }
 
 export function isRole(value: string): value is Role {
