@@ -3,14 +3,20 @@ import { createClient } from "@/lib/supabase/server";
 import { safeNextPath } from "@/lib/auth-navigation";
 
 export async function GET(request: NextRequest) {
-  const code = request.nextUrl.searchParams.get("code");
+  const params = request.nextUrl.searchParams;
+  const next = safeNextPath(params.get("next"));
+  const code = params.get("code");
   if (code) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) return NextResponse.redirect(new URL(safeNextPath(request.nextUrl.searchParams.get("next")) || "/pasajero/buscar-vuelos", request.url));
+    if (!error) return NextResponse.redirect(new URL(next || "/pasajero/buscar-vuelos", request.url));
   }
-  const query = new URLSearchParams({ error: "confirmacion" });
-  const next = safeNextPath(request.nextUrl.searchParams.get("next"));
+  // Enlace expirado, rechazado o intercambio fallido: conservamos el motivo para
+  // que /ingresar muestre un mensaje específico y ofrezca reenviar el correo.
+  const failure = params.get("error_code") ?? params.get("error") ?? "confirmacion";
+  const query = new URLSearchParams({ error: failure });
+  const description = params.get("error_description");
+  if (description) query.set("error_description", description);
   if (next) query.set("next", next);
   return NextResponse.redirect(new URL(`/ingresar?${query}`, request.url));
 }

@@ -41,5 +41,5 @@ export default async function WorkspaceLayout({ children, params }: { children: 
       <main className="workspace-content">{children}</main>
     </div>
   </div>;
-  return <WorkspaceFrame normal={normal} name={userName} live={live} role={role} items={items} passengerHeader={<PassengerHeader signedIn={signedIn} sprint={appSprint} />}>{children}</WorkspaceFrame>;
+  return <WorkspaceFrame normal={normal} name={userName} live={live} role={role} items={items} passengerHeader={<PassengerHeader signedIn={signedIn} sprint={appSprint} live={live} />}>{children}</WorkspaceFrame>;
 }

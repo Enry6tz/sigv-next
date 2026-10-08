@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { durationMinutes, stopsLabel, searchFlights, bookingHref, parsePassengerCount, validReturnFlight } from "../src/lib/passenger-search.ts";
+import { durationMinutes, stopsLabel, searchFlights, bookingHref, parsePassengerCount, validReturnFlight, fareAvailable } from "../src/lib/passenger-search.ts";
 
 const flight = { id: "AR-1420", origin: "EZE", destination: "BRC", date: "2026-10-14", departure: "23:30", arrival: "01:15", economy: 100, first: 250, seatsEconomy: 5, seatsFirst: 1, status: "Activo" };
 
@@ -36,6 +36,18 @@ test("busca por ruta y fecha y excluye cancelados, archivados y sin cupos sufici
 test("ordena por la tarifa disponible para todo el grupo", () => {
   const cheapSoldOut = { ...flight, id: "first-only", economy: 1, seatsEconomy: 0, seatsFirst: 3 };
   assert.deepEqual(searchFlights([cheapSoldOut, flight], { origin: "EZE", destination: "BRC", date: flight.date, passengers: 2 }, "price").map((f) => f.id), ["AR-1420", "first-only"]);
+});
+
+test("la preferencia de cabina filtra resultados y ordena por su tarifa", () => {
+  const econoOnly = { ...flight, id: "econo-only", economy: 50, seatsEconomy: 8, seatsFirst: 0, first: 999 };
+  const firstOnly = { ...flight, id: "first-only", economy: 1, seatsEconomy: 0, seatsFirst: 4, first: 120 };
+  const rows = [econoOnly, flight, firstOnly];
+  const base = { origin: "EZE", destination: "BRC", date: flight.date, passengers: 1 };
+  assert.deepEqual(searchFlights(rows, { ...base, cabin: "Primera" }, "price").map((f) => f.id), ["first-only", "AR-1420"]);
+  assert.deepEqual(searchFlights(rows, { ...base, cabin: "Economy" }, "price").map((f) => f.id), ["econo-only", "AR-1420"]);
+  assert.deepEqual(searchFlights(rows, { ...base, cabin: "" }, "price").map((f) => f.id), ["econo-only", "AR-1420", "first-only"]);
+  assert.equal(fareAvailable(flight, "Primera", 1), 250);
+  assert.equal(fareAvailable(flight, "", 1), 100);
 });
 
 test("conserva vuelo, cabina y pasajeros al continuar a la compra", () => {

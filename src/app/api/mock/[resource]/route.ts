@@ -7,6 +7,7 @@ import { publicError } from "@/lib/api-errors";
 import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
 import { adminFlightDto } from "@/lib/admin-flights";
 import { cabinAvailable, validReturnFlight, type Cabin } from "@/lib/passenger-search";
+import { documentProblem, emailProblem, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +106,14 @@ export async function POST(request: NextRequest, context: Context) {
       return NextResponse.json({ error: "Vuelo no disponible" }, { status: 400 });
     }
     if (new Set(passengers.map((person) => String(person.document).trim().toLowerCase())).size !== count) return NextResponse.json({ error: "Cada pasajero debe tener un documento diferente" }, { status: 400 });
+    for (const person of passengers) {
+      const problem = documentProblem(String(person.document));
+      if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    }
+    const contactEmail = normalizeEmail(String(payload.contactEmail ?? ""));
+    const contactPhone = normalizePhone(String(payload.contactPhone ?? ""));
+    const contactProblem = emailProblem(contactEmail) ?? phoneProblem(contactPhone);
+    if (contactProblem) return NextResponse.json({ error: contactProblem }, { status: 400 });
     const returning = flights.find((f) => f.id === payload.returnFlightId);
     if (payload.returnFlightId && (!returning || !validReturnFlight(flight, returning) || !["Economy", "Primera"].includes(String(payload.returnCabin)) || !cabinAvailable(returning, payload.returnCabin as Cabin, count))) return NextResponse.json({ error: "Vuelo de vuelta no disponible" }, { status: 400 });
     const code = `DEMO-${Date.now().toString(36).toUpperCase()}`;
