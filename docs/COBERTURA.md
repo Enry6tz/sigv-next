@@ -6,8 +6,8 @@ La asignación por sprint es editable: las fuentes SIGV no fijan una división a
 | --- | --- |
 | US-001 a US-005 | CRUD de vuelos, aeropuertos, aviones, programaciones, frecuencias, cupos y tarifas; reprogramación, cancelación, archivo, generación de vuelos y auditoría. |
 | US-006 y US-007 | Búsqueda pública por ruta y fecha, horarios, disponibilidad y comparación de tarifas Economy/Primera. |
-| US-008 a US-014 | Registro público de pasajero con datos personales, Supabase Auth, confirmación de correo configurada, inicio/cierre de sesión, perfil editable y roles protegidos por RLS. La entrega real del correo no se verificó con un buzón. |
-| US-015 y US-016 | Reserva de 1 a 9 pasajes por clase, acompañantes identificados, documento diferente por persona y cupos descontados en transacción. |
+| US-008 a US-014 | Registro público de pasajero con datos personales, Supabase Auth, confirmación de correo habilitada, inicio/cierre de sesión, perfil editable con cambio de correo confirmado por enlace, roles protegidos por RLS y mensajes de error traducidos. El reenvío de confirmación está disponible desde el formulario. La entrega real del correo no se verificó con un buzón. |
+| US-015 y US-016 | Reserva de 1 a 9 pasajes por clase, clase ajustable también desde la pantalla de compra, acompañantes identificados, documento numérico de 6 a 8 caracteres, un único pasaje por documento y vuelo, contacto del comprador obligatorio y cupos descontados en transacción. |
 
 | Requisito | Estado y límite |
 | --- | --- |

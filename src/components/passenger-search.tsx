@@ -5,7 +5,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { Flight } from "@/lib/mock-data";
 import { displayFlightCode } from "@/lib/flight-code";
 import { findModule } from "@/lib/catalog";
-import { bookingHref, cabinAvailable, durationMinutes, parsePassengerCount, searchFlights, stopsLabel, validReturnFlight, type Cabin, type FlightSort, type PassengerQuery } from "@/lib/passenger-search";
+import { bookingHref, cabinAvailable, durationMinutes, fareAvailable, parsePassengerCount, searchFlights, stopsLabel, validReturnFlight, type Cabin, type FlightSort, type PassengerQuery } from "@/lib/passenger-search";
 
 type Airport = { code: string; city: string };
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
@@ -33,7 +33,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [maxPrice, setMaxPrice] = useState("");
-  const [preferredCabin, setPreferredCabin] = useState<Cabin>(initialQuery.cabin === "Primera" ? "Primera" : "Economy");
+  const [preferredCabin, setPreferredCabin] = useState<Cabin | "">(initialQuery.cabin === "Primera" ? "Primera" : initialQuery.cabin === "Economy" ? "Economy" : "");
   const [today] = useState(() => new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }));
   const hasSearch = Boolean(initialQuery.origin && initialQuery.destination && initialQuery.date);
   const roundTrip = initialQuery.trip === "round-trip" && Boolean(initialQuery.returnDate);
@@ -69,7 +69,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
   const outboundFlight = flights?.find((flight) => flight.id === outbound?.flight);
   const results = searchFlights(flights ?? [], { ...activeQuery, passengers }, sort).filter((flight) =>
     (leg !== "return" || !outboundFlight || validReturnFlight(outboundFlight, flight)) && (!directOnly || !flight.stops?.length) &&
-    (!maxPrice || Math.min(cabinAvailable(flight, "Economy", passengers) ? flight.economy : Infinity, cabinAvailable(flight, "Primera", passengers) ? flight.first : Infinity) <= Number(maxPrice)));
+    (!maxPrice || fareAvailable(flight, preferredCabin, passengers) <= Number(maxPrice)));
   const city = (code: string) => airports.find((airport) => airport.code === code)?.city ?? code;
   function submit(event: FormEvent<HTMLFormElement>) {
     if (origin === destination) { event.preventDefault(); setValidation("El origen y el destino deben ser distintos."); }
@@ -89,7 +89,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
           <label>Fecha de ida<input name="date" type="date" value={travelDate} onChange={(event) => setTravelDate(event.target.value)} min={today} required /></label>
           <label>Fecha de vuelta<input name="returnDate" type="date" value={returnDate} onChange={(event) => setReturnDate(event.target.value)} min={travelDate || today} required={trip === "round-trip"} disabled={trip !== "round-trip"} /></label>
           <label className="passenger-count">Pasajeros<span className="passenger-location-field"><span aria-hidden="true">👤</span><select name="passengers" value={count} onChange={(event) => setCount(Number(event.target.value))}>{Array.from({ length: 9 }, (_, index) => <option key={index} value={index + 1}>{index + 1} {index ? "pasajeros" : "pasajero"}</option>)}</select></span></label>
-          <label className="passenger-cabin-preference">Clase de cabina<select name="cabin" value={preferredCabin} onChange={(event) => setPreferredCabin(event.target.value as Cabin)}><option value="Economy">Economy</option><option value="Primera">Primera clase</option></select></label>
+          <label className="passenger-cabin-preference">Clase de cabina<select name="cabin" value={preferredCabin} onChange={(event) => setPreferredCabin(event.target.value as Cabin | "")}><option value="">Cualquiera</option><option value="Economy">Economy</option><option value="Primera">Primera clase</option></select></label>
           <button className="button dark" type="submit" disabled={!airports.length}><span>Buscar<br /> vuelos</span></button>
         </div>
         <input type="hidden" name="trip" value={trip} />
@@ -112,7 +112,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
           <div className="passenger-flight-list">{results.map((flight, index) => {
             const selected = selection?.flight === flight.id;
             const duration = durationMinutes(flight);
-            const mobileCabin = selected ? selection.cabin : cabinAvailable(flight, preferredCabin, passengers) ? preferredCabin : cabinAvailable(flight, "Economy", passengers) ? "Economy" : "Primera";
+            const mobileCabin = selected ? selection.cabin : preferredCabin && cabinAvailable(flight, preferredCabin, passengers) ? preferredCabin : cabinAvailable(flight, "Economy", passengers) ? "Economy" : "Primera";
             const mobileSeats = mobileCabin === "Economy" ? flight.seatsEconomy : flight.seatsFirst;
             const proceed = selected && (roundTrip && leg === "outbound" ? <button className="button dark small" type="button" onClick={() => { setOutbound(selection); setSelection(null); setExpandedFlight(null); setLeg("return"); }}>Elegir vuelta →</button> : <Link className="button dark small" href={leg === "return" && outbound ? bookingHref(outbound.flight, outbound.cabin, passengers, selection) : bookingHref(flight.id, selection.cabin, passengers)}>Continuar →</Link>);
             return <article className={`passenger-flight-row${selected ? " selected" : ""}${expandedFlight === flight.id ? " classes-open" : ""}${index === 0 && !selection ? " featured" : ""}`} key={flight.id} aria-label={`Vuelo ${displayFlightCode(flight)}`}>

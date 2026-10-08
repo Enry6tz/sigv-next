@@ -27,6 +27,10 @@ const businessMessages = new Set([
   "Seleccioná al menos un día de operación", "El período elegido no incluye los días de operación seleccionados",
   "Asigná al menos un asiento para publicar el vuelo", "Los horarios de salida y llegada deben ser diferentes",
   "Seleccioná un regreso por la ruta inversa después de la llegada de la ida", "Las reservas de ida y vuelta no son válidas",
+  "Ingresá un correo electrónico válido.",
+  "El teléfono debe tener entre 6 y 15 dígitos. Se admiten espacios, paréntesis, guiones y el prefijo +.",
+  "El documento debe tener entre 6 y 8 dígitos, sin letras ni espacios.",
+  "Ese documento ya tiene un pasaje para este vuelo.",
 ]);
 
 export function databaseError(error: { code?: string; message: string }): ApiError {
@@ -37,9 +41,12 @@ export function databaseError(error: { code?: string; message: string }): ApiErr
     if (/reservation_id/i.test(error.message)) return new ApiError("La reserva elegida ya no está disponible. Actualizá la pantalla y revisá su estado.");
     return new ApiError("Uno de los datos seleccionados ya no está disponible. Actualizá la pantalla y volvé a elegirlo.");
   }
-  if (error.code === "23505") return new ApiError(/flight_schedules_code|flights_pkey/i.test(error.message)
-    ? "Ya existe un vuelo con ese código. Ingresá un código diferente."
-    : "Ya existe un registro con esos datos. Revisá la información ingresada.", 409);
+  if (error.code === "23505") {
+    if (/sigv_profiles_document_unique/i.test(error.message)) return new ApiError("Ese documento ya está asociado a otra cuenta.", 409);
+    return new ApiError(/flight_schedules_code|flights_pkey/i.test(error.message)
+      ? "Ya existe un vuelo con ese código. Ingresá un código diferente."
+      : "Ya existe un registro con esos datos. Revisá la información ingresada.", 409);
+  }
   if (error.code === "23514" || error.code?.startsWith("22") || error.code === "23502") return new ApiError("Revisá los campos: las fechas, tarifas y cantidades deben tener valores válidos.");
   if (error.code === "42501") return new ApiError("No tenés permiso para esta operación.", 403);
   if (error.code === "PGRST116") return new ApiError("El registro ya no está disponible. Actualizá la pantalla.", 404);

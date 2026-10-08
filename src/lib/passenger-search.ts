@@ -30,14 +30,23 @@ export function cabinAvailable(flight: Flight, cabin: Cabin, count: number) {
     (cabin === "Economy" ? flight.seatsEconomy : flight.seatsFirst) >= count;
 }
 
-export function searchFlights(flights: Flight[], query: Omit<PassengerQuery, "passengers"> & { passengers: number }, sort: FlightSort) {
-  const price = (flight: Flight) => Math.min(
-    cabinAvailable(flight, "Economy", query.passengers) ? flight.economy : Infinity,
-    cabinAvailable(flight, "Primera", query.passengers) ? flight.first : Infinity,
+// Mejor tarifa utilizable para el grupo, opcionalmente restringida a una cabina.
+export function fareAvailable(flight: Flight, cabin: Cabin | "" | null | undefined, count: number) {
+  if (cabin) return cabinAvailable(flight, cabin, count) ? (cabin === "Economy" ? flight.economy : flight.first) : Infinity;
+  return Math.min(
+    cabinAvailable(flight, "Economy", count) ? flight.economy : Infinity,
+    cabinAvailable(flight, "Primera", count) ? flight.first : Infinity,
   );
+}
+
+export function searchFlights(flights: Flight[], query: Omit<PassengerQuery, "passengers"> & { passengers: number }, sort: FlightSort) {
+  // Una preferencia de cabina concreta filtra los resultados a vuelos con cupos en
+  // esa cabina y ordena el precio con su tarifa.
+  const preferred = query.cabin === "Economy" || query.cabin === "Primera" ? query.cabin : null;
   return flights.filter((flight) => flight.origin === query.origin && flight.destination === query.destination && flight.date === query.date &&
-    (cabinAvailable(flight, "Economy", query.passengers) || cabinAvailable(flight, "Primera", query.passengers)))
-    .sort((a, b) => sort === "price" ? price(a) - price(b) : sort === "duration" ? durationMinutes(a) - durationMinutes(b) : clockMinutes(a[sort]) - clockMinutes(b[sort]));
+    (preferred ? cabinAvailable(flight, preferred, query.passengers)
+      : cabinAvailable(flight, "Economy", query.passengers) || cabinAvailable(flight, "Primera", query.passengers)))
+    .sort((a, b) => sort === "price" ? fareAvailable(a, preferred, query.passengers) - fareAvailable(b, preferred, query.passengers) : sort === "duration" ? durationMinutes(a) - durationMinutes(b) : clockMinutes(a[sort]) - clockMinutes(b[sort]));
 }
 
 export function validReturnFlight(outbound: Flight, returning: Flight) {

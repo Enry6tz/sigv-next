@@ -8,6 +8,9 @@ import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
 import { ActionNotice, type Notice } from "./action-notice";
 import { mutate } from "@/lib/mutations";
+import { createClient } from "@/lib/supabase/client";
+import { mapAuthError } from "@/lib/auth-errors";
+import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 
 
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
@@ -126,18 +129,48 @@ function Reservations({ live }: { live: boolean }) {
 }
 
 function Profile({ live }: { live: boolean }) {
-  const { data, error, refresh } = useMock<{ name: string; email: string; phone: string; document: string }>("profile");
+  const { data, error, refresh } = useMock<{ name: string; email: string; phone: string; document: string; pendingEmail?: string | null }>("profile");
   const [message, setMessage] = useState<Notice>(null);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") ?? "").trim();
+    const document = normalizeDocument(String(form.get("document") ?? ""));
+    const phone = normalizePhone(String(form.get("phone") ?? ""));
+    const email = normalizeEmail(String(form.get("email") ?? ""));
+    const problem = (name ? null : "Ingresá tu nombre completo.") ?? documentProblem(document) ?? emailProblem(email) ?? phoneProblem(phone);
+    if (problem) { setMessage({ ok: false, text: problem }); return; }
     setMessage(null);
-    const result = await mutate("profile", "PATCH", payload);
-    setMessage({ ok: result.ok, text: result.ok ? "Perfil actualizado correctamente." : result.error });
-    if (result.ok) refresh();
+    const result = await mutate("profile", "PATCH", { name, document, phone });
+    let text = result.ok ? "Perfil actualizado correctamente." : result.error;
+    let ok = result.ok;
+    if (result.ok && data && email !== normalizeEmail(data.email)) {
+      try {
+        const supabase = createClient();
+        const { error: emailError } = await supabase.auth.updateUser(
+          { email },
+          { emailRedirectTo: `${window.location.origin}/auth/callback?next=/pasajero/perfil` },
+        );
+        if (emailError) throw emailError;
+        text = `Perfil actualizado. Enviamos un enlace de confirmación a ${email}. Seguís recibiendo los correos en ${data.email} hasta abrirlo.`;
+      } catch (reason) {
+        ok = false;
+        text = `Perfil actualizado, pero no se pudo pedir el cambio de correo: ${mapAuthError(reason)}`;
+      }
+    }
+    setMessage({ ok, text });
+    refresh();
   }
   if (!live) return <GenericCollection resource="profile" live={false} />;
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS DATOS</p><h2>Perfil personal</h2></div></div>{error && <p role="alert" className="error-text">{error}</p>}{!data && !error && <p role="status">Cargando perfil…</p>}{data && <form className="stack-form" onSubmit={save} key={JSON.stringify(data)}><label>Correo electrónico<input value={data.email} disabled /></label><label>Nombre completo<input name="name" defaultValue={data.name} required /></label><label>Documento<input name="document" defaultValue={data.document ?? ""} /></label><label>Teléfono<input name="phone" defaultValue={data.phone ?? ""} /></label><button className="button dark">Guardar perfil</button></form>}<ActionNotice notice={message} /></section>;
+  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS DATOS</p><h2>Perfil personal</h2></div></div>{error && <p role="alert" className="error-text">{error}</p>}{!data && !error && <p role="status">Cargando perfil…</p>}{data && <form className="stack-form" onSubmit={save} key={JSON.stringify(data)}>
+    {data.pendingEmail && <p className="form-status" role="status">Hay un cambio de correo pendiente en <strong>{data.pendingEmail}</strong>. Seguís usando {data.email} hasta abrir el enlace de confirmación.</p>}
+    <label>Correo electrónico<input name="email" type="email" defaultValue={data.email} autoComplete="email" required /></label>
+    <label>Nombre completo<input name="name" defaultValue={data.name} required /></label>
+    <label>Documento<input name="document" defaultValue={data.document ?? ""} inputMode="numeric" pattern="[0-9]{6,8}" title="Entre 6 y 8 dígitos, sin letras ni espacios" /></label>
+    <label>Teléfono<input name="phone" type="tel" defaultValue={data.phone ?? ""} autoComplete="tel" /></label>
+    <button className="button dark">Guardar perfil</button>
+    <p className="form-hint">Para cambiar el correo te enviamos un enlace de confirmación a la dirección nueva.</p>
+  </form>}<ActionNotice notice={message} /></section>;
 }
 
 function GenericCollection({ resource, live }: { resource: string; live: boolean }) {

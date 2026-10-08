@@ -5,6 +5,7 @@ import { ApiError, databaseError } from "@/lib/api-errors";
 import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
 import { adminFlightDto } from "@/lib/admin-flights";
+import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
@@ -140,8 +141,12 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   }
   if (resource === "profile") {
     const userId = await requireUser(client);
-    const row = unwrap(await client.from("profiles").select("name,email,phone,document").eq("user_id", userId).single());
-    return row;
+    const row = unwrap(await client.from("profiles").select("name,email,phone,document").eq("user_id", userId).single()) as { name: string; email: string; phone: string; document: string } | null;
+    if (!row) throw new ApiError("Perfil no encontrado", 404);
+    // Supabase Auth es la fuente de verdad del correo: refleja cambios confirmados
+    // y expone un cambio pendiente (new_email) hasta que se abra el enlace.
+    const { data: authData } = await client.auth.getUser();
+    return { name: row.name, email: authData.user?.email ?? row.email, phone: row.phone, document: row.document, pendingEmail: authData.user?.new_email ?? null };
   }
   if (resource === "auth") {
     const userId = await session(client);
@@ -350,11 +355,26 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     const count = Number(payload.passengerCount);
     if (!Array.isArray(passengers) || !Number.isInteger(count) || count < 1 || count > 9 || passengers.length !== count)
       throw new ApiError("La compra admite entre 1 y 9 pasajeros identificados");
+    const contactEmail = normalizeEmail(text(payload.contactEmail));
+    const contactPhone = normalizePhone(text(payload.contactPhone));
+    const contactProblem = emailProblem(contactEmail) ?? phoneProblem(contactPhone);
+    if (contactProblem) throw new ApiError(contactProblem);
+    const normalizedPassengers = passengers.map((person: Json) => {
+      const firstName = text(person?.firstName);
+      const lastName = text(person?.lastName);
+      const document = normalizeDocument(text(person?.document));
+      const personProblem = !firstName || !lastName ? "Completá nombre, apellido y documento de cada pasajero" : documentProblem(document);
+      if (personProblem) throw new ApiError(personProblem);
+      return { ...person, firstName, lastName, document };
+    });
+    if (new Set(normalizedPassengers.map((person: Json) => String(person.document).toLowerCase())).size !== count)
+      throw new ApiError("Cada pasajero debe tener un documento diferente");
     if (text(payload.returnFlightId)) return unwrap(await client.rpc("sigv_reserve_round_trip", {
       p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin),
-      p_return_flight_id: text(payload.returnFlightId), p_return_cabin: text(payload.returnCabin), p_passengers: passengers,
+      p_return_flight_id: text(payload.returnFlightId), p_return_cabin: text(payload.returnCabin), p_passengers: normalizedPassengers,
+      p_contact_email: contactEmail, p_contact_phone: contactPhone || null,
     }));
-    return unwrap(await client.rpc("sigv_reserve", { p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin), p_passengers: passengers }));
+    return unwrap(await client.rpc("sigv_reserve", { p_flight_id: text(payload.flightId), p_cabin: text(payload.cabin), p_passengers: normalizedPassengers, p_contact_email: contactEmail, p_contact_phone: contactPhone || null }));
   }
   if (resource === "reservations" && method === "DELETE") {
     await requireUser(client);
@@ -394,7 +414,12 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "profile" && method === "PATCH") {
     const userId = await requireUser(client);
-    const updates = { name: text(payload.name), phone: text(payload.phone), document: text(payload.document) };
+    const name = text(payload.name);
+    const document = normalizeDocument(text(payload.document));
+    const phone = normalizePhone(text(payload.phone));
+    const problem = name.trim() ? documentProblem(document) ?? phoneProblem(phone) : "Ingresá tu nombre completo.";
+    if (problem) throw new ApiError(problem);
+    const updates = { name: name.trim(), phone, document };
     return unwrap(await client.from("profiles").update(updates).eq("user_id", userId).select("name,email,phone,document").single());
   }
   if (resource === "flights" && method === "POST") {
