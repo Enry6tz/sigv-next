@@ -15,7 +15,7 @@ export function WorkspaceFrame({ normal, children, name, live, role, items, pass
     <div className="admin-flights-account"><span className="admin-flights-avatar" aria-hidden="true">{name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span>{name}<small>Admin. Operativo</small></span>{live ? <SignOutButton /> : <Link href="/" className="header-exit">Salir de la demo</Link>}</div>
   </header>
     <nav className="admin-navigation" aria-label="Navegación de administración">
-      {items.filter((item) => ["vuelos", "capacidades", "tarifas", "reportes"].includes(item.slug)).map((item) => {
+      {items.map((item) => {
         const href = `/admin/${item.slug}`;
         return <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined}>{item.label}</Link>;
       })}

@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { findModule, isRole } from "@/lib/catalog";
+import { canAccess, findModule, isRole } from "@/lib/catalog";
 import { appSprint, dataProvider } from "@/lib/sprint";
 import { ModuleContent } from "@/components/module-content";
 import { createClient } from "@/lib/supabase/server";
@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
 export default async function SectionPage({ params, searchParams }: { params: Promise<{ role: string; section: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { role, section } = await params;
   if (!isRole(role)) notFound();
-  const sectionModule = findModule(role, section);
-  if (!sectionModule || sectionModule.sprint > appSprint) notFound();
+  if (!canAccess(role, section, appSprint)) notFound();
+  const sectionModule = findModule(role, section)!;
   if (role === "pasajero" && section === "inicio") redirect("/pasajero/buscar-vuelos");
   const query = await searchParams;
   if (dataProvider === "supabase" && role === "pasajero" && !["inicio", "buscar-vuelos"].includes(section)) {
@@ -31,7 +31,7 @@ export default async function SectionPage({ params, searchParams }: { params: Pr
     reservation: typeof query.reservation === "string" ? query.reservation : "",
     returnReservation: typeof query.returnReservation === "string" ? query.returnReservation : "",
     passengers: typeof query.passengers === "string" ? query.passengers : "1",
-    cabin: query.cabin === "Primera" ? "Primera" : "Economy",
+    cabin: query.cabin === "Primera" ? "Primera" : query.cabin === "Economy" ? "Economy" : "",
     returnFlight: typeof query.returnFlight === "string" ? query.returnFlight : "",
     returnCabin: query.returnCabin === "Primera" ? "Primera" : "Economy",
     returnDate: typeof query.returnDate === "string" ? query.returnDate : "",

@@ -20,7 +20,7 @@ La rama `sprint-1` permite probar la compra completa con `APP_SPRINT=1`: selecci
 
 1. Ejecutar npm ci.
 2. Copiar .env.sprint3.example a .env.sprint3.local y completar NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Mantener DATA_PROVIDER=supabase y APP_SPRINT=3.
-3. Aplicar en orden los archivos de supabase/migrations/ en el SQL Editor. El proyecto SIGV de pruebas ya los tiene aplicados hasta 20261001_notification_dedupe.sql.
+3. Aplicar en orden los archivos de supabase/migrations/ en el SQL Editor. El proyecto SIGV de pruebas ya los tiene aplicados hasta 20261001_notification_dedupe.sql; falta aplicar los cuatro de 20261006 (`publish_flight_schedule`, `admin_flight_list`, `round_trip`) y `20261008_reservation_contact.sql`. Este último es obligatorio antes de desplegar la compra que registra el contacto del comprador: las funciones `sigv_reserve`/`sigv_reserve_round_trip` nuevas exigen `contact_email` y fallan con 'Ingresá un correo electrónico válido.' si falta.
 4. En Supabase Auth, habilitar registro por email, exigir confirmación y permitir la URL de retorno del entorno, por ejemplo http://localhost:3001/auth/callback.
 5. Ejecutar npm run dev:s3, o npm run build:s3 seguido de npm run start:s3 para producción local en el puerto 3001.
 
@@ -28,7 +28,7 @@ Los perfiles S1 y S2 usan npm run dev:s1 y npm run dev:s2. Cada .env.sprintN.loc
 
 ## Acceso y roles
 
-El registro de pasajeros es público. El formulario pide nombre, apellido, documento, email y contraseña; teléfono es opcional. Supabase Auth confirma el correo. El trigger de alta crea el perfil y asigna siempre pasajero; el cliente no puede elegir un rol superior. Solo un administrador puede asignar mostrador o admin. Las rutas y operaciones protegidas verifican sesión, rol y políticas RLS. La entrega real del correo depende de la configuración del proyecto Supabase.
+El registro de pasajeros es público. El formulario pide nombre, apellido, documento numérico, email y contraseña (mínimo 8 caracteres con letras y números, con confirmación); teléfono es opcional. Supabase Auth confirma el correo; la entrega real queda a cargo del proveedor SMTP configurado en el proyecto y puede reenviarse desde el formulario. El trigger de alta crea el perfil y asigna siempre pasajero; el cliente no puede elegir un rol superior. Solo un administrador puede asignar mostrador o admin. Las rutas y operaciones protegidas verifican sesión, rol y políticas RLS.
 
 ## Módulos
 
