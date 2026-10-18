@@ -13,7 +13,7 @@ export function normalizeDocument(value: string): string {
 export function documentProblem(value: string): string | null {
   const document = normalizeDocument(value);
   if (!document) return "Ingresá el documento del pasajero.";
-  if (!DOCUMENT_PATTERN.test(document)) return "El documento debe tener entre 6 y 8 dígitos, sin letras ni espacios.";
+  if (!DOCUMENT_PATTERN.test(document)) return numericFieldProblem("documento", "6 a 8 dígitos, sin letras ni espacios", value);
   return null;
 }
 
@@ -25,9 +25,18 @@ export function phoneProblem(value: string): string | null {
   const phone = normalizePhone(value);
   if (!phone) return null; // el teléfono es opcional
   if (!PHONE_ALLOWED.test(phone) || (phone.match(PHONE_DIGITS)?.length ?? 0) < 6) {
-    return "El teléfono debe tener entre 6 y 15 dígitos. Se admiten espacios, paréntesis, guiones y el prefijo +.";
+    return numericFieldProblem("teléfono", "entre 6 y 15 dígitos, se admiten espacios, paréntesis, guiones y el prefijo +", phone);
   }
   return null;
+}
+
+/**
+ * C2 - Corrección observación sprint 1: mensaje unificado para campos numéricos.
+ * Formato: "formato de <campo> inválido, debe ser <formato_correspondiente>"
+ */
+export function numericFieldProblem(field: string, expectedFormat: string, value: string): string | null {
+  if (!value || !value.trim()) return null; // vacío se maneja con el mensaje de campo requerido
+  return `formato de ${field} inválido, debe ser ${expectedFormat}.`;
 }
 
 export function normalizeEmail(value: string): string {

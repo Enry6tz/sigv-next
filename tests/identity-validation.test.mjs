@@ -11,9 +11,9 @@ test("normaliza documentos con puntos, espacios o guiones", () => {
 test("exige documentos numéricos de 6 a 8 dígitos", () => {
   assert.match(documentProblem(""), /Ingresá el documento/);
   assert.match(documentProblem("   "), /Ingresá el documento/);
-  assert.match(documentProblem("12.345"), /entre 6 y 8 dígitos/);
-  assert.match(documentProblem("QA-FLOW-1"), /entre 6 y 8 dígitos/);
-  assert.match(documentProblem("123456789"), /entre 6 y 8 dígitos/);
+  assert.match(documentProblem("12.345"), /formato de documento inválido/);
+  assert.match(documentProblem("QA-FLOW-1"), /formato de documento inválido/);
+  assert.match(documentProblem("123456789"), /formato de documento inválido/);
   assert.equal(documentProblem("30.111.222"), null);
   assert.equal(documentProblem("30111222"), null);
 });
