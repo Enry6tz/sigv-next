@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { findModule, type Module } from "@/lib/catalog";
 import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
@@ -11,6 +12,16 @@ import { mutate } from "@/lib/mutations";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
+import {
+  cardNumberProblem,
+  cardHolderProblem,
+  cardExpiryProblem,
+  cardCvvProblem,
+  formatCardExpiry,
+  groupCardNumber,
+  normalizeCardCvv,
+  normalizeCardNumber,
+} from "@/lib/checkout-validation";
 
 
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
@@ -48,19 +59,152 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
   const [message, setMessage] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [paid, setPaid] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardHolder, setCardHolder] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
+  const [cnErr, setCnErr] = useState("");
+  const [chErr, setChErr] = useState("");
+  const [ceErr, setCeErr] = useState("");
+  const [ccErr, setCcErr] = useState("");
+  const router = useRouter();
+
+  function onCardNumberChange(event: ChangeEvent<HTMLInputElement>) {
+    setCardNumber(groupCardNumber(event.target.value));
+    setCnErr("");
+  }
+
+  function onCardExpiryChange(event: ChangeEvent<HTMLInputElement>) {
+    setCardExpiry(formatCardExpiry(event.target.value));
+    setCeErr("");
+  }
+
+  function onCardCvvChange(event: ChangeEvent<HTMLInputElement>) {
+    setCardCvv(normalizeCardCvv(event.target.value));
+    setCcErr("");
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || paid) return;
+
+    const problems = {
+      cardNumber: cardNumberProblem(cardNumber),
+      cardHolder: cardHolderProblem(cardHolder),
+      cardExpiry: cardExpiryProblem(cardExpiry),
+      cardCvv: cardCvvProblem(cardCvv),
+    };
+
+    setCnErr(problems.cardNumber ?? "");
+    setChErr(problems.cardHolder ?? "");
+    setCeErr(problems.cardExpiry ?? "");
+    setCcErr(problems.cardCvv ?? "");
+
+    if (Object.values(problems).some((problem) => Boolean(problem))) return;
+
     setBusy(true);
+    setMessage(null);
     const data = Object.fromEntries(new FormData(event.currentTarget));
     if (returnReservation) data.returnReservationCode = returnReservation;
-    setMessage(null);
+    data.cardNumber = normalizeCardNumber(cardNumber);
+    data.cardHolder = cardHolder.trim();
+    data.cardExpiry = cardExpiry;
+    data.cardCvv = normalizeCardCvv(cardCvv);
+
     const result = await mutate("payments", "POST", data);
-    setPaid(result.ok);
     setBusy(false);
-    setMessage({ ok: result.ok, text: result.ok ? `Pago de prueba aprobado · comprobante ${result.data.invoice}${result.data.returnPayment ? ` · Vuelta ${result.data.returnPayment.invoice}` : ""}. ${live ? "Pago registrado." : "No se guardaron datos."} No se procesó dinero.` : result.error });
+
+    if (result.ok) {
+      setPaid(true);
+      setConfirmed(true);
+      const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
+      router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
+    } else {
+      setMessage({ ok: false, text: result.error });
+    }
   }
-  return <div className="two-column"><section className="panel"><p className="kicker">PASO 2 DE 2</p><h2>Pago de prueba</h2><form className="stack-form" onSubmit={submit}><label>Código de reserva de ida<input name="reservationCode" placeholder="SIGV-..." defaultValue={reservationCode} readOnly={Boolean(returnReservation)} required /></label>{returnReservation && <label>Código de reserva de vuelta<input value={returnReservation} readOnly /></label>}<label>Método de pago<select name="method"><option>Tarjeta de prueba</option><option>Transferencia de prueba</option></select></label><button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : paid ? "Pago aprobado" : "Simular pago"}</button></form><ActionNotice notice={message} />{paid && <div className="action-row"><Link className="button small" href="/pasajero/mis-reservas">Ver mis reservas</Link><Link className="button small" href="/pasajero/buscar-vuelos">Buscar otro vuelo</Link></div>}</section><aside className="panel summary-panel"><h2>Sin cobros reales</h2><p>El pago de prueba confirma {returnReservation ? "los dos tramos de tu viaje" : "tu reserva"}. No se procesa dinero.</p></aside></div>;
+
+  if (confirmed) {
+    return (
+      <div className="two-column">
+        <section className="panel">
+          <p className="kicker">PASO 2 DE 2</p>
+          <h2>¡Reserva Confirmada!</h2>
+          <p>Tu pasaje fue emitido exitosamente.</p>
+          <div className="record-grid">
+            <div><strong>Número de Reserva</strong><span>{reservationCode}</span></div>
+            {returnReservation && <div><strong>Reserva de Vuelta</strong><span>{returnReservation}</span></div>}
+            <div><strong>Estado</strong><span>Pagado</span></div>
+          </div>
+          <div className="action-row">
+            <button className="button dark" disabled={!live}>Descargar Boarding Pass</button>
+            <Link className="button small" href="/pasajero/mis-reservas">Ver mis reservas</Link>
+          </div>
+        </section>
+        <aside className="panel summary-panel">
+          <h2>Resumen del pago</h2>
+          <p>El pago se procesó correctamente y tu reserva está confirmada.</p>
+          <p className="form-hint">No se procesó dinero real. Esta es una simulación de prueba.</p>
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="two-column">
+      <section className="panel">
+        <p className="kicker">PASO 2 DE 2</p>
+        <h2>Datos de Pago</h2>
+        <form className="stack-form" onSubmit={submit}>
+          <label>Código de reserva<span className="muted"> (no se modifica)</span>
+            <input name="reservationCode" defaultValue={reservationCode} readOnly required />
+          </label>
+          {returnReservation && (
+            <label>Código de reserva de vuelta<span className="muted"> (no se modifica)</span>
+              <input name="returnReservationCode" defaultValue={returnReservation} readOnly required />
+            </label>
+          )}
+          <div className="form-row card-brand-pills">
+            <button type="button" role="radio" aria-checked="true">VISA</button>
+            <button type="button" role="radio" aria-checked="false">MC</button>
+            <button type="button" role="radio" aria-checked="false">AMEX</button>
+            <button type="button" role="radio" aria-checked="false">DEBIT</button>
+          </div>
+          <label>NÚMERO DE TARJETA
+            <input name="cardNumber" inputMode="numeric" autoComplete="cc-number" maxLength={19} value={cardNumber} onChange={onCardNumberChange} required />
+            {cnErr && <span className="field-error">{cnErr}</span>}
+          </label>
+          <label>NOMBRE EN LA TARJETA
+            <input name="cardHolder" autoComplete="cc-name" value={cardHolder} onChange={(event) => { setCardHolder(event.target.value); setChErr(""); }} required />
+            {chErr && <span className="field-error">{chErr}</span>}
+          </label>
+          <div className="form-row">
+            <label>VENCIMIENTO (MM/AA)
+              <input name="cardExpiry" inputMode="numeric" autoComplete="cc-exp" maxLength={5} value={cardExpiry} onChange={onCardExpiryChange} required />
+              {ceErr && <span className="field-error">{ceErr}</span>}
+            </label>
+            <label>CÓDIGO DE SEGURIDAD (CVV)
+              <input name="cardCvv" inputMode="numeric" autoComplete="cc-csc" maxLength={4} value={cardCvv} onChange={onCardCvvChange} required />
+              {ccErr && <span className="field-error">{ccErr}</span>}
+            </label>
+          </div>
+          <label>CUOTAS
+            <input name="installments" defaultValue="1 cuota sin interés" readOnly />
+          </label>
+          <p className="form-hint"><span aria-hidden="true">🔒</span> Tu información de pago está cifrada con tecnología SSL de 256 bits. SIGV nunca almacena el número completo de tu tarjeta.</p>
+          <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : "Confirmar y Pagar"}</button>
+        </form>
+        {message && <ActionNotice notice={message} />}
+      </section>
+      <aside className="panel summary-panel">
+        <h2>Resumen de compra</h2>
+        <p>Reserva {reservationCode}{returnReservation && ` + Vuelta {returnReservation}`}</p>
+        <p className="form-hint">Al continuar aceptás los Términos y Condiciones de SIGV Aerolínea Nacional.</p>
+        <p className="form-hint">Usá el botón Confirmar y Pagar para finalizar.</p>
+      </aside>
+    </div>
+  );
 }
 
 function CheckIn({ live }: { live: boolean }) {
