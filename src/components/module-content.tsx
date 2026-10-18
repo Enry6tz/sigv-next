@@ -219,6 +219,78 @@ function CheckIn({ live }: { live: boolean }) {
   return <div className="two-column"><section className="panel"><p className="kicker">ATENCIÓN PRESENCIAL</p><h2>Registrar check-in</h2><form className="stack-form" onSubmit={submit}><label>Código de reserva<input name="reservationCode" placeholder="SIGV-..." required /></label>{live && <label>Documento del pasajero<input name="document" required /></label>}<div className="form-row"><label>Asiento<input name="seat" placeholder="Ej. 3A Economy / 1A Primera" pattern="[0-9]{1,2}[A-Fa-f]" required /></label><label>Equipaje en bodega (kg)<input type="number" name="baggageKg" min="0" max="40" step="0.1" defaultValue="0" required /></label></div><button className="button dark">Registrar check-in</button></form><ActionNotice notice={message} /></section><aside className="panel summary-panel"><h2>Verificación de mostrador</h2><p>{live ? "La reserva, el documento, la cabina, la disponibilidad del asiento y el equipaje se comprueban en Supabase antes de registrar el pase." : "Datos de prueba para recorrer el proceso."}</p></aside></div>;
 }
 
+type ManifestRow = { reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
+
+function Manifest() {
+  const [flights, setFlights] = useState<{ id: string; origin: string; destination: string; flight_date: string }[] | null>(null);
+  const [manifest, setManifest] = useState<ManifestRow[] | null>(null);
+  const [error, setError] = useState("");
+  const [selectedFlight, setSelectedFlight] = useState("");
+  const [search, setSearch] = useState("");
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/data/flights", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudieron cargar los vuelos."));
+        const body = await response.json();
+        setFlights((body.data ?? []) as { id: string; origin: string; destination: string; flight_date: string }[]);
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedFlight) return;
+    const controller = new AbortController();
+    fetch("/api/data/manifest", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudo cargar el manifiesto."));
+        const body = await response.json();
+        setManifest((body.data ?? []) as ManifestRow[]);
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, [selectedFlight, revision]);
+
+  const flight = flights?.find((f) => f.id === selectedFlight);
+  const rows = (manifest || []).filter((row) => {
+    if (row.flightId !== selectedFlight) return false;
+    const q = search.toLowerCase();
+    return row.passenger.toLowerCase().includes(q) || row.document.toLowerCase().includes(q) || row.reservationCode.toLowerCase().includes(q);
+  });
+
+  return <section className="panel">
+    <div className="panel-title"><div><p className="kicker">MOSTRADOR / MANIFIESTO</p><h2>Manifiesto de pasajeros</h2></div></div>
+    {error && <p role="alert" className="error-text">{error}</p>}
+    {!flights && <p role="status">Cargando vuelos…</p>}
+    {flights && !selectedFlight && <div className="form-row"><label>Vuelo<select onChange={(event) => { setSelectedFlight(event.target.value); setSearch(""); }}><option value="">Seleccioná un vuelo</option>{flights.map((f) => <option key={f.id} value={f.id}>{f.id} · ${f.origin} → ${f.destination} (${new Date(f.flight_date).toLocaleDateString("es-AR")})</option>)}</select></label></div>}
+    {selectedFlight && (
+      <>
+        <div className="form-row" style={{ marginBottom: 16 }}>
+          <label>Buscar por DNI, nombre o reserva<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="DNI, apellido o código de reserva…" /></label>
+          <button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button>
+        </div>
+        {flight && <div style={{ marginBottom: 12, color: "#777", fontSize: "12px" }}>{flight.origin} → ${flight.destination} · ${new Date(flight.flight_date).toLocaleDateString("es-AR")} · ${rows.length} pasajero${rows.length !== 1 ? "s" : ""} confirmado${rows.length !== 1 ? "s" : ""}</div>}
+        {rows.length === 0 ? <div className="empty-inline">No hay pasajeros confirmados para este vuelo con los criterios de búsqueda.</div> : (
+          <div className="record-grid">
+            {rows.map((row) => (
+              <article className="record-card" key={`${row.reservationCode}-${row.document}`}>
+                <strong>{row.reservationCode}</strong>
+                <p>{row.passenger}</p>
+                <p>Documento: {row.document}</p>
+                <p>Asiento: {row.seat ?? "—"} · Equipaje: {row.baggageKg ?? "—"} kg</p>
+                <p><Status value={row.checkedIn ? "Completado" : "Pendiente"} /></p>
+              </article>
+            ))}
+          </div>
+        )}
+      </>
+    )}
+  </section>;
+}
+
 type EditableRow = Record<string, string | number | null>;
 type EditableResource = "airports" | "capacities" | "fares" | "disruptions" | "users" | "notifications";
 
@@ -361,6 +433,7 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
+  if (module.slug === "manifiesto") return <Manifest />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
   if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
