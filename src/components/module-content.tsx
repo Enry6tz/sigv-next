@@ -207,16 +207,144 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
   );
 }
 
+type CheckInReservation = { code: string; flightId: string; cabin: string; passenger: string; document: string; seat: string | null; checkedIn: boolean };
+
 function CheckIn({ live }: { live: boolean }) {
   const [message, setMessage] = useState<Notice>(null);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget));
-    setMessage(null);
-    const result = await mutate("check-in", "POST", payload);
-    setMessage({ ok: result.ok, text: result.ok ? `Check-in ${live ? "registrado" : "simulado"} · asiento ${result.data.seat} · pase ${result.data.boardingPass}` : result.error });
+  const [busy, setBusy] = useState(false);
+  const [reservation, setReservation] = useState<CheckInReservation | null>(null);
+  const [seats, setSeats] = useState<{ code: string; cabin: string; status: string }[] | null>(null);
+  const [selectedSeat, setSelectedSeat] = useState<string | null>(null);
+  const [baggageKg, setBaggageKg] = useState("0");
+  const [reservationCode, setReservationCode] = useState("");
+  const [document, setDocument] = useState("");
+
+  async function lookupReservation() {
+    if (!reservationCode || !document) return;
+    setBusy(true); setMessage(null); setReservation(null); setSeats(null); setSelectedSeat(null);
+    try {
+      const response = await fetch("/api/data/manifest", { cache: "no-store" });
+      if (!response.ok) throw new Error("No se pudo buscar la reserva.");
+      const body = await response.json();
+      const rows = (body.data ?? []) as ManifestRow[];
+      const row = rows.find((r) => r.reservationCode === reservationCode && r.document === document);
+      if (!row) throw new Error("Reserva no encontrada.");
+      if (row.checkedIn) throw new Error("El pasajero ya tiene check-in.");
+
+      // Obtener cabina de la reserva
+      const resResponse = await fetch("/api/data/reservations", { cache: "no-store" });
+      if (!resResponse.ok) throw new Error("No se pudo obtener el detalle de la reserva.");
+      const resBody = await resResponse.json();
+      const resRows = (resBody.data ?? []) as { code: string; cabin: string }[];
+      const resRow = resRows.find((r) => r.code === reservationCode);
+      const cabin = resRow?.cabin ?? "Economy";
+
+      setReservation({
+        code: row.reservationCode,
+        flightId: row.flightId,
+        cabin,
+        passenger: row.passenger,
+        document: row.document,
+        seat: row.seat ?? null,
+        checkedIn: row.checkedIn,
+      });
+
+      const seatsResponse = await fetch(`/api/data/seats?flightId=${encodeURIComponent(row.flightId)}`, { cache: "no-store" });
+      if (!seatsResponse.ok) throw new Error("No se pudieron cargar los asientos.");
+      const seatsBody = await seatsResponse.json();
+      setSeats((seatsBody.data ?? []) as { code: string; cabin: string; status: string }[]);
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : "Error al buscar la reserva." });
+    } finally {
+      setBusy(false);
+    }
   }
-  return <div className="two-column"><section className="panel"><p className="kicker">ATENCIÓN PRESENCIAL</p><h2>Registrar check-in</h2><form className="stack-form" onSubmit={submit}><label>Código de reserva<input name="reservationCode" placeholder="SIGV-..." required /></label>{live && <label>Documento del pasajero<input name="document" required /></label>}<div className="form-row"><label>Asiento<input name="seat" placeholder="Ej. 3A Economy / 1A Primera" pattern="[0-9]{1,2}[A-Fa-f]" required /></label><label>Equipaje en bodega (kg)<input type="number" name="baggageKg" min="0" max="40" step="0.1" defaultValue="0" required /></label></div><button className="button dark">Registrar check-in</button></form><ActionNotice notice={message} /></section><aside className="panel summary-panel"><h2>Verificación de mostrador</h2><p>{live ? "La reserva, el documento, la cabina, la disponibilidad del asiento y el equipaje se comprueban en Supabase antes de registrar el pase." : "Datos de prueba para recorrer el proceso."}</p></aside></div>;
+
+  async function submitCheckIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !reservation || !selectedSeat) return;
+    setBusy(true); setMessage(null);
+    const result = await mutate("check-in", "POST", {
+      reservationCode: reservation.code,
+      document: reservation.document,
+      seat: selectedSeat,
+      baggageKg: Number(baggageKg),
+    });
+    setBusy(false);
+    if (result.ok) {
+      setMessage({ ok: true, text: `Check-in ${live ? "registrado" : "simulado"} · asiento ${result.data.seat} · pase ${result.data.boardingPass}` });
+      setSelectedSeat(null);
+    } else {
+      setMessage({ ok: false, text: result.error });
+    }
+  }
+
+  const cabinSeats = (seats || []).filter((s) => s.cabin === reservation?.cabin);
+  const availableSeats = cabinSeats.filter((s) => s.status === "Disponible");
+
+  return (
+    <div className="two-column">
+      <section className="panel">
+        <p className="kicker">ATENCIÓN PRESENCIAL</p>
+        <h2>Registrar check-in</h2>
+        {!reservation ? (
+          <form className="stack-form" onSubmit={(e) => { e.preventDefault(); lookupReservation(); }}>
+            <label>Código de reserva<input name="reservationCode" value={reservationCode} onChange={(e) => setReservationCode(e.target.value)} placeholder="SIGV-..." required /></label>
+            {live && <label>Documento del pasajero<input name="document" value={document} onChange={(e) => setDocument(e.target.value)} placeholder="DNI del pasajero" required /></label>}
+            <button className="button dark" disabled={busy || !reservationCode || !document}>{busy ? "Buscando…" : "Buscar reserva"}</button>
+          </form>
+        ) : (
+          <>
+            <div style={{ marginBottom: 16, padding: 16, background: "#eef7f0", borderLeft: "3px solid #286345" }}>
+              <p style={{ margin: 0, fontSize: "12px", fontWeight: "700" }}>{reservation.passenger}</p>
+              <p style={{ margin: 4, fontSize: "11px", color: "#777" }}>{reservation.code} · {reservation.flightId} · Clase {reservation.cabin}</p>
+            </div>
+            <p className="form-hint">Seleccioná un asiento disponible en el mapa. Los asientos ocupados o bloqueados no se pueden elegir.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 28px)", gap: "4px", marginBottom: "12px" }}>
+              {cabinSeats.map((s) => {
+                const isAvailable = s.status === "Disponible";
+                const isSelected = selectedSeat === s.code;
+                const disabled = s.status !== "Disponible";
+                return (
+                  <button
+                    key={s.code}
+                    type="button"
+                    disabled={disabled}
+                    onClick={!disabled ? () => setSelectedSeat(s.code) : undefined}
+                    style={{
+                      width: "28px", height: "28px",
+                      background: isSelected ? "#222" : isAvailable ? "#286345" : s.status === "Ocupado" ? "#a23434" : "#ddd",
+                      color: isSelected || isAvailable ? "#fff" : "#222",
+                      border: "none", borderRadius: "2px", cursor: disabled ? "not-allowed" : "pointer",
+                      fontSize: "10px", fontWeight: "700",
+                    }}
+                    title={`${s.code} · ${s.status}`}
+                  >
+                    {s.code}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ marginBottom: "16px", fontSize: "11px" }}>
+              <span style={{ marginRight: "12px" }}><span style={{ width: "12px", height: "12px", background: "#286345", display: "inline-block", marginRight: "4px" }} />Disponible</span>
+              <span style={{ marginRight: "12px" }}><span style={{ width: "12px", height: "12px", background: "#a23434", display: "inline-block", marginRight: "4px" }} />Ocupado</span>
+              <span style={{ marginRight: "12px" }}><span style={{ width: "12px", height: "12px", background: "#ddd", display: "inline-block", marginRight: "4px" }} />Bloqueado</span>
+              <span><span style={{ width: "12px", height: "12px", background: "#222", display: "inline-block", marginRight: "4px" }} />Seleccionado</span>
+            </div>
+            <p>{availableSeats.length} asiento{availableSeats.length !== 1 ? "s" : ""} disponible{availableSeats.length !== 1 ? "s" : ""} de {cabinSeats.length} en cabina {reservation.cabin}</p>
+            <form className="stack-form" onSubmit={submitCheckIn}>
+              <label>Asiento<input name="seat" value={selectedSeat ?? ""} readOnly required /></label>
+              <label>Equipaje en bodega (kg)<input type="number" name="baggageKg" min="0" max="40" step="0.1" value={baggageKg} onChange={(e) => setBaggageKg(e.target.value)} required /></label>
+              <button className="button dark" disabled={busy || !selectedSeat}>{busy ? "Registrando…" : "Registrar check-in"}</button>
+              <button type="button" className="button" onClick={() => { setReservation(null); setSeats(null); setSelectedSeat(null); setReservationCode(""); setDocument(""); }}>Otra reserva</button>
+            </form>
+          </>
+        )}
+        {message && <ActionNotice notice={message} />}
+      </section>
+      <aside className="panel summary-panel"><h2>Verificación de mostrador</h2><p>{live ? "La reserva, el documento, la cabina, la disponibilidad del asiento y el equipaje se comprueban en Supabase antes de registrar el pase." : "Datos de prueba para recorrer el proceso."}</p></aside>
+    </div>
+  );
 }
 
 type ManifestRow = { reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
