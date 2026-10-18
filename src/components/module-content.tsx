@@ -292,6 +292,150 @@ function Manifest() {
 }
 
 type EditableRow = Record<string, string | number | null>;
+
+type BoardingPassRow = { reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
+
+function BoardingPass() {
+  const [passes, setPasses] = useState<BoardingPassRow[] | null>(null);
+  const [flights, setFlights] = useState<{ id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string }[] | null>(null);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<BoardingPassRow & { origin: string; destination: string; flight_date: string; departure: string; arrival: string } | null>(null);
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/data/boarding-passes", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudo cargar el listado de pases."));
+        const body = await response.json();
+        setPasses((body.data ?? []) as BoardingPassRow[]);
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, [revision]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/data/flights", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudieron cargar los vuelos."));
+        const body = await response.json();
+        setFlights((body.data ?? []) as { id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string }[]);
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, []);
+
+  function qrMatrix(code: string, size: number) {
+    let hash = 0;
+    for (let i = 0; i < code.length; i++) hash = ((hash << 5) - hash + code.charCodeAt(i)) | 0;
+    const cells: boolean[][] = [];
+    for (let r = 0; r < size; r++) {
+      const row: boolean[] = [];
+      for (let c = 0; c < size; c++) {
+        hash = ((hash << 13) ^ (hash >> 17)) | 0;
+        row.push(((hash >> (c % 5)) & 1) === 1);
+      }
+      cells.push(row);
+    }
+    return cells;
+  }
+
+  if (selected) {
+    const flight = flights?.find((f) => f.id === selected.flightId);
+    const cells = qrMatrix(selected.boardingPass ?? selected.reservationCode, 21);
+    return (
+      <section className="panel" style={{ maxWidth: "700px", margin: "0 auto" }}>
+        <div className="panel-title"><div><p className="kicker">TARJETA DE EMBARQUE</p><h2>Boarding Pass</h2></div><button className="button small" onClick={() => setSelected(null)}>Volver al listado</button></div>
+        <div style={{ border: "2px solid #222", padding: "24px", background: "#fff", fontFamily: "Consolas, monospace" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+            <div>
+              <p style={{ margin: 0, fontSize: "11px", color: "#777", textTransform: "uppercase" }}>SIGV · Aerolínea Nacional</p>
+              <p style={{ margin: 0, fontSize: "24px", fontWeight: "700" }}>Tarjeta de Embarque</p>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <p style={{ margin: 0, fontSize: "11px", fontWeight: "700" }}>{selected.boardingPass}</p>
+            </div>
+          </div>
+          <div style={{ borderBottom: "1px solid #ddd", paddingBottom: "16px", marginBottom: "16px" }}>
+            <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Vuelo</p>
+            <p style={{ margin: 0, fontSize: "16px", fontWeight: "700" }}>{flight ? `${flight.origin} → ${flight.destination}` : selected.flightId}</p>
+            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#555" }}>{flight ? `${new Date(flight.flight_date).toLocaleDateString("es-AR")} · ${flight.departure} → ${flight.arrival}` : ""}</p>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
+            <div>
+              <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Pasajero</p>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>{selected.passenger}</p>
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Documento</p>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>{selected.document}</p>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+            <div>
+              <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Asiento</p>
+              <p style={{ margin: 0, fontSize: "20px", fontWeight: "700" }}>{selected.seat}</p>
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Reserva</p>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>{selected.reservationCode}</p>
+            </div>
+          </div>
+          <div style={{ marginTop: "24px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase", marginBottom: "8px" }}>Código QR de embarque</p>
+            <div style={{ display: "grid", gap: "2px" }}>
+              {cells.map((row, r) => (
+                <div key={r} style={{ display: "flex", gap: "2px" }}>
+                  {row.map((cell, c) => (
+                    <div key={c} style={{ width: "12px", height: "12px", background: cell ? "#222" : "#eee" }} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: "24px", textAlign: "center" }}>
+            <button className="button dark" onClick={() => window.print()}>Imprimir Tarjeta de Embarque</button>
+          </div>
+          <p style={{ marginTop: "16px", fontSize: "11px", color: "#777" }}>Presenta esta tarjeta en la puerta de embarque junto con tu documento de identidad.</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (error) return <section className="panel"><p role="alert" className="error-text">{error}</p></section>;
+  if (!passes) return <section className="panel"><p role="status">Cargando pases de embarque…</p></section>;
+
+  const passList = passes.filter((p) => p.checkedIn && p.boardingPass);
+
+  return (
+    <section className="panel">
+      <div className="panel-title"><div><p className="kicker">MOSTRADOR / BOARDING PASS</p><h2>Pases de embarque</h2></div><button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button></div>
+      {passList.length === 0 ? (
+        <div className="empty-inline">No hay pases de embarque generados. Los pases se crean tras el check-in con asiento asignado.</div>
+      ) : (
+        <div className="record-grid">
+          {passList.map((row) => {
+            const flight = flights?.find((f) => f.id === row.flightId);
+            return (
+              <article className="record-card" key={row.reservationCode} style={{ cursor: "pointer" }} onClick={() => {
+                const f = flights?.find((fl) => fl.id === row.flightId);
+                setSelected({ ...row, origin: f?.origin ?? "", destination: f?.destination ?? "", flight_date: f?.flight_date ?? "", departure: f?.departure ?? "", arrival: f?.arrival ?? "" });
+              }}>
+                <strong>{row.reservationCode}</strong>
+                <p>{row.passenger}</p>
+                <p>Vuelo: {flight ? `${flight.origin} → ${flight.destination}` : row.flightId}</p>
+                <p>Asiento: {row.seat}</p>
+                <p>Pase: {row.boardingPass}</p>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 type EditableResource = "airports" | "capacities" | "fares" | "disruptions" | "users" | "notifications";
 
 function ResourceManager({ resource, live }: { resource: EditableResource; live: boolean }) {
@@ -434,6 +578,7 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
   if (module.slug === "manifiesto") return <Manifest />;
+  if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
   if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
