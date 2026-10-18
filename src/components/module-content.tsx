@@ -462,7 +462,8 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
   }
   function fields() {
     if (resource === "airports") return <>{creating && <label>Código IATA<input name="code" pattern="[A-Za-z]{3}" required /></label>}<label>Ciudad<input name="city" defaultValue={String(editing?.city ?? "")} required /></label><label>Nombre<input name="name" defaultValue={String(editing?.name ?? "")} required /></label></>;
-    if (resource === "capacities" || resource === "fares") return <div className="form-row"><label>{resource === "fares" ? "Tarifa Economy" : "Capacidad Economy"}<input name="economy" type="number" min="0" step={resource === "fares" ? "0.01" : "1"} defaultValue={resource === "capacities" ? Number(editing?.capacityEconomy ?? 0) : Number(editing?.economy ?? 0)} required /></label><label>{resource === "fares" ? "Tarifa Primera" : "Capacidad Primera"}<input name="first" type="number" min="0" step={resource === "fares" ? "0.01" : "1"} defaultValue={resource === "capacities" ? Number(editing?.capacityFirst ?? 0) : Number(editing?.first ?? 0)} required /></label></div>;
+    if (resource === "capacities") return <div className="form-row"><label>Capacidad Economy<input name="economy" type="number" min="0" step="1" defaultValue={Number(editing?.capacityEconomy ?? 0)} required /></label><label>Capacidad Primera<input name="first" type="number" min="0" step="1" defaultValue={Number(editing?.capacityFirst ?? 0)} required /></label></div>;
+    if (resource === "fares") return <div className="form-row"><label>Tarifa Economy<input name="economy" type="text" inputMode="decimal" placeholder="0" defaultValue={Number(editing?.economy ?? 0)} required /></label><label>Tarifa Primera<input name="first" type="text" inputMode="decimal" placeholder="0" defaultValue={Number(editing?.first ?? 0)} required /></label></div>;
     if (resource === "disruptions") return <><label>Estado<select name="status" defaultValue={String(editing?.status ?? "Activo")}><option>Activo</option><option>Retrasado</option><option>Cancelado</option></select></label><p className="form-hint">Al cancelar el vuelo se cancelan sus reservas y se generan avisos para los pasajeros.</p></>;
     if (resource === "users") return <label>Rol<select name="role" defaultValue={String(editing?.role ?? "pasajero")}><option value="pasajero">Pasajero</option><option value="mostrador">Mostrador</option><option value="admin">Administrador</option></select></label>;
     return null;
@@ -491,14 +492,23 @@ function Reservations({ live }: { live: boolean }) {
 function Profile({ live }: { live: boolean }) {
   const { data, error, refresh } = useMock<{ name: string; email: string; phone: string; document: string; pendingEmail?: string | null }>("profile");
   const [message, setMessage] = useState<Notice>(null);
+  const parts = data?.name.trim().split(/\s+/) ?? [];
+  const firstNameDisplay = parts[0] ?? "";
+  const lastNameDisplay = parts.slice(1).join(" ") ?? "";
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") ?? "").trim();
+    const firstName = String(form.get("firstName") ?? "").trim();
+    const lastName = String(form.get("lastName") ?? "").trim();
+    const name = `${firstName} ${lastName}`.trim();
     const document = normalizeDocument(String(form.get("document") ?? ""));
     const phone = normalizePhone(String(form.get("phone") ?? ""));
     const email = normalizeEmail(String(form.get("email") ?? ""));
-    const problem = (name ? null : "Ingresá tu nombre completo.") ?? documentProblem(document) ?? emailProblem(email) ?? phoneProblem(phone);
+    let problem: string | null = null;
+    if (!firstName || !lastName) problem = "Ingresá tu nombre y apellido.";
+    else if (documentProblem(document)) problem = documentProblem(document);
+    else if (emailProblem(email)) problem = emailProblem(email);
+    else problem = phoneProblem(phone);
     if (problem) { setMessage({ ok: false, text: problem }); return; }
     setMessage(null);
     const result = await mutate("profile", "PATCH", { name, document, phone });
@@ -525,7 +535,8 @@ function Profile({ live }: { live: boolean }) {
   return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS DATOS</p><h2>Perfil personal</h2></div></div>{error && <p role="alert" className="error-text">{error}</p>}{!data && !error && <p role="status">Cargando perfil…</p>}{data && <form className="stack-form" onSubmit={save} key={JSON.stringify(data)}>
     {data.pendingEmail && <p className="form-status" role="status">Hay un cambio de correo pendiente en <strong>{data.pendingEmail}</strong>. Seguís usando {data.email} hasta abrir el enlace de confirmación.</p>}
     <label>Correo electrónico<input name="email" type="email" defaultValue={data.email} autoComplete="email" required /></label>
-    <label>Nombre completo<input name="name" defaultValue={data.name} required /></label>
+    <label>Nombre<input name="firstName" defaultValue={firstNameDisplay} required /></label>
+    <label>Apellido<input name="lastName" defaultValue={lastNameDisplay} required /></label>
     <label>Documento<input name="document" defaultValue={data.document ?? ""} inputMode="numeric" pattern="[0-9]{6,8}" title="Entre 6 y 8 dígitos, sin letras ni espacios" /></label>
     <label>Teléfono<input name="phone" type="tel" defaultValue={data.phone ?? ""} autoComplete="tel" /></label>
     <button className="button dark">Guardar perfil</button>
