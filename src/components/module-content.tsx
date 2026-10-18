@@ -566,6 +566,75 @@ function BoardingPass() {
 
 type EditableResource = "airports" | "capacities" | "fares" | "disruptions" | "users" | "notifications";
 
+type DisruptionRow = { flightId: string; kind: string; affectedBookings: number; status: string };
+
+function Disruptions() {
+  const [rows, setRows] = useState<DisruptionRow[] | null>(null);
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [message, setMessage] = useState<Notice>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/data/disruptions", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudieron cargar las contingencias."));
+        const body = await response.json();
+        setRows((body.data ?? []) as DisruptionRow[]);
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, [revision]);
+
+  async function changeStatus(flightId: string, status: string) {
+    setMessage(null);
+    const result = await mutate("disruptions", "PATCH", { flightId, status });
+    if (result.ok) {
+      setMessage({ ok: true, text: `Estado del vuelo ${flightId} actualizado a ${status}.` });
+      setRevision((v) => v + 1);
+    } else {
+      setMessage({ ok: false, text: result.error });
+    }
+  }
+
+  const statusLabel: Record<string, string> = { Activo: "Sin contingencia", Retrasado: "Retraso", Cancelado: "Cancelación" };
+
+  return (
+    <section className="panel">
+      <div className="panel-title"><div><p className="kicker">GESTIÓN DE ESTADOS</p><h2>Cambiar estado de vuelo</h2></div><button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button></div>
+      {error && <p role="alert" className="error-text">{error}</p>}
+      {!rows && <p role="status">Cargando contingencias…</p>}
+      {rows && rows.length === 0 && <div className="empty-inline">No hay vuelos registrados.</div>}
+      {rows && rows.length > 0 && (
+        <div className="record-grid">
+          {rows.map((row) => (
+            <article className="record-card" key={row.flightId}>
+              <strong>{row.flightId}</strong>
+              <p>Estado: {row.status}</p>
+              <p>Contingencia: {statusLabel[row.kind] ?? row.kind}</p>
+              <p>Reservas afectadas: {row.affectedBookings}</p>
+              <div className="action-row">
+                <select
+                  value={row.status}
+                  onChange={(event) => void changeStatus(row.flightId, event.target.value)}
+                  disabled={row.status === "Cancelado" && row.affectedBookings > 0}
+                >
+                  <option value="Activo">Activo</option>
+                  <option value="Retrasado">Retrasado</option>
+                  <option value="Cancelado">Cancelado</option>
+                </select>
+                {row.status === "Cancelado" && row.affectedBookings > 0 && <span className="muted" style={{ fontSize: "11px" }}>(reservas reagendadas)</span>}
+              </div>
+              {message && <ActionNotice notice={message} />}
+            </article>
+          ))}
+        </div>
+      )}
+      <p className="form-hint">Al cancelar un vuelo, sus reservas pasan a &apos;A reagendar&apos; o &apos;A reembolsar&apos; y los pasajeros reciben un aviso automático. Los cambios quedan registrados en auditoría.</p>
+    </section>
+  );
+}
+
 type InvoiceRow = { id: string; number: string; amount: number; issuedAt: string; reservationCode: string };
 type ReservationRow = { code: string; flightId: string; cabin: string; passenger: string; passengers: { seat: string | null }[] };
 type FlightRow = { id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string };
@@ -850,6 +919,7 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "manifiesto") return <Manifest />;
   if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "facturas") return <Comprobantes />;
+  if (module.slug === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
   if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
