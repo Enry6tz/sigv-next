@@ -20,7 +20,7 @@ La rama `sprint-1` permite probar la compra completa con `APP_SPRINT=1`: selecci
 
 1. Ejecutar npm ci.
 2. Copiar .env.sprint3.example a .env.sprint3.local y completar NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Mantener DATA_PROVIDER=supabase y APP_SPRINT=3.
-3. Aplicar en orden los archivos de supabase/migrations/ en el SQL Editor. El proyecto SIGV de pruebas ya los tiene aplicados hasta 20261001_notification_dedupe.sql; falta aplicar los cuatro de 20261006 (`publish_flight_schedule`, `admin_flight_list`, `round_trip`) y `20261008_reservation_contact.sql`. Este último es obligatorio antes de desplegar la compra que registra el contacto del comprador: las funciones `sigv_reserve`/`sigv_reserve_round_trip` nuevas exigen `contact_email` y fallan con 'Ingresá un correo electrónico válido.' si falta.
+3. Aplicar en orden los archivos de supabase/migrations/ en el SQL Editor. El proyecto SIGV de pruebas ya los tiene aplicados hasta 20261008_reservation_contact.sql (incluye columnas contact_email/contact_phone en reservas y firma de sigv_reserve con contacto). Falta aplicar `20261010_payment_inventory.sql`: redefine sigv_demo_payment y sigv_demo_payment_leg para descontar asientos del inventario solo al confirmar el pago exitoso, y ajusta sigv_cancel_reservation para liberar asientos solo de reservas confirmadas. Sin esta migración, US-018 (inventario consistente con el pago) no funciona.
 4. En Supabase Auth, habilitar registro por email, exigir confirmación y permitir la URL de retorno del entorno, por ejemplo http://localhost:3001/auth/callback.
 5. Ejecutar npm run dev:s3, o npm run build:s3 seguido de npm run start:s3 para producción local en el puerto 3001.
 
@@ -39,6 +39,19 @@ El registro de pasajeros es público. El formulario pide nombre, apellido, docum
 | S3 | S2 + notificaciones, tickets digitales, reportes y auditoría. |
 
 src/lib/catalog.ts define el sprint mínimo de cada pantalla y recurso. El servidor oculta menús futuros, devuelve 404 en rutas futuras y SPRINT_DISABLED en APIs futuras. El proveedor mock permite revisar la interfaz sin Supabase; sus escrituras no persisten. El proveedor supabase usa datos reales, RLS y funciones RPC. /api/data/{resource} es la ruta principal; /api/mock/{resource} es un alias compatible.
+
+## Sprint 2 - Historias implementadas
+
+| US | Título | Prioridad | Estado | Detalle |
+|----|--------|-----------|--------|---------|
+| US-017 | Información de pago | Alta | ✅ Implementada | Página "Datos de Pago" con tarjeta (número 16 dígitos, titular, vencimiento MM/AA, CVV 3-4), validación por campo con mensaje junto al campo afectado, cobro simulado atómico, redirección a "¡Reserva Confirmada!" y liberación de asientos si el pago falla. |
+| US-018 | Actualizar inventario vuelos | Alta | ✅ Implementada | Migración 20261010_payment_inventory.sql: sigv_demo_payment descuenta asientos solo al confirmar pago exitoso; sigv_cancel_reservation libera asientos solo de reservas confirmadas; bloqueo FOR UPDATE previene sobreventa concurrente. |
+| US-019 | Recibo notificación | Media | ✅ Implementada | Comprobantes: descarga de E-ticket y Factura en HTML (imprimible como PDF) con datos del viaje, pasajero, monto y código QR visual. Botón "Enviar por Email" presente pero deshabilitado (falta infraestructura de correo saliente comercial). |
+| US-020 | Búsqueda de vuelos y manifiesto | Alta | ✅ Implementada | Manifiesto de mostrador con selector de vuelo, tabla de pasajeros confirmados (reserva, pasajero, documento, asiento, equipaje, estado check-in), buscador por DNI/nombre/código de reserva y estado vacío. |
+| US-021 | Seleccionar pasajero en cabina | Media | ✅ Implementada | Mapa de asientos interactivo filtrado por cabina del pasajero (Disponible/Ocupado/Bloqueado), selección de asiento y registro de check-in con asiento elegido. Respeta la clase contratada. |
+| US-022 | Generar tarjeta de embarque | Alta | ✅ Implementada | Listado de pases de embarque generados tras check-in, vista detallada con vuelo, pasajero, asiento, reserva y código QR visual, botón de impresión. |
+| US-023 | Cambiar vuelo | Media | ✅ Implementada | Gestión de estados para admin: lista vuelos con estado y reservas afectadas, cambio de estado (Activo/Retrasado/Cancelado). Los triggers de BD actualizan reservas, generan notificaciones y escriben log de auditoría. |
+| — | Corrección observaciones Sprint 1 | Alta | ✅ Implementada | C1: Perfil separa Nombre y Apellido en campos distintos. C2: Mensaje unificado "formato de <campo> inválido, debe ser <formato>" para campos numéricos (documento, teléfono). C3: Campos de precio/tarifa usan type=text con inputMode=decimal para quitar botones de incremento/decremento. |
 
 ## Datos y límites
 
