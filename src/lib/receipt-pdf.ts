@@ -87,24 +87,28 @@ function note(sheet: Sheet, text: string) {
   sheet.y -= 14;
 }
 
+function route(sheet: Sheet, flight: ReceiptFlight) {
+  const { page, bold, regular } = sheet;
+  const right = sheet.width - MARGIN;
+  page.drawText(pdfText(flight.origin), { x: MARGIN, y: sheet.y - 20, size: 32, font: bold, color: INK });
+  const destination = pdfText(flight.destination);
+  page.drawText(destination, { x: right - bold.widthOfTextAtSize(destination, 32), y: sheet.y - 20, size: 32, font: bold, color: INK });
+  page.drawLine({ start: { x: MARGIN + 110, y: sheet.y - 8 }, end: { x: right - 110, y: sheet.y - 8 }, thickness: 1, color: RULE, dashArray: [4, 4] });
+  const flightLabel = fit(`Vuelo ${flight.code}`, regular, 10, right - MARGIN - 240);
+  page.drawText(flightLabel, { x: (sheet.width - regular.widthOfTextAtSize(flightLabel, 10)) / 2, y: sheet.y - 2, size: 10, font: regular, color: MUTED });
+  page.drawText(pdfText(flight.departure), { x: MARGIN, y: sheet.y - 42, size: 14, font: regular, color: INK });
+  const arrival = pdfText(flight.arrival);
+  page.drawText(arrival, { x: right - regular.widthOfTextAtSize(arrival, 14), y: sheet.y - 42, size: 14, font: regular, color: INK });
+  sheet.y -= 80;
+  rule(sheet);
+  fields(sheet, [["Fecha", flightDate(flight.date)], ["Salida", flight.departure], ["Llegada", flight.arrival]]);
+}
+
 export async function eticketPdf(leg: ReceiptLeg, passenger: ReceiptPassenger) {
   const doc = await createSheet("E-TICKET", leg.reservationCode);
-  const { page, bold, regular } = doc;
   fields(doc, [["Pasajero", `${passenger.firstName} ${passenger.lastName}`], ["Documento", passenger.document]]);
   rule(doc);
-  const right = doc.width - MARGIN;
-  page.drawText(pdfText(leg.flight.origin), { x: MARGIN, y: doc.y - 20, size: 32, font: bold, color: INK });
-  const destination = pdfText(leg.flight.destination);
-  page.drawText(destination, { x: right - bold.widthOfTextAtSize(destination, 32), y: doc.y - 20, size: 32, font: bold, color: INK });
-  page.drawLine({ start: { x: MARGIN + 110, y: doc.y - 8 }, end: { x: right - 110, y: doc.y - 8 }, thickness: 1, color: RULE, dashArray: [4, 4] });
-  const flightLabel = fit(`Vuelo ${leg.flight.code}`, regular, 10, right - MARGIN - 240);
-  page.drawText(flightLabel, { x: (doc.width - regular.widthOfTextAtSize(flightLabel, 10)) / 2, y: doc.y - 2, size: 10, font: regular, color: MUTED });
-  page.drawText(pdfText(leg.flight.departure), { x: MARGIN, y: doc.y - 42, size: 14, font: regular, color: INK });
-  const arrival = pdfText(leg.flight.arrival);
-  page.drawText(arrival, { x: right - regular.widthOfTextAtSize(arrival, 14), y: doc.y - 42, size: 14, font: regular, color: INK });
-  doc.y -= 80;
-  rule(doc);
-  fields(doc, [["Fecha", flightDate(leg.flight.date)], ["Salida", leg.flight.departure], ["Llegada", leg.flight.arrival]]);
+  route(doc, leg.flight);
   fields(doc, [["Código de reserva", leg.reservationCode], ["Clase", leg.cabin], ["Asiento", passenger.seat ?? "Se asigna en el check-in"]]);
   rule(doc);
   note(doc, "Presentá este e-ticket y tu documento de identidad en el mostrador para hacer el check-in.");
@@ -152,5 +156,34 @@ export async function invoicePdf(leg: ReceiptLeg, timeZone = "America/Argentina/
   doc.y -= 50;
   note(doc, "Comprobante de la compra emitido automáticamente tras el pago aprobado.");
   note(doc, "Pago de prueba: no se procesó dinero real.");
+  return doc.pdf.save();
+}
+
+export type BoardingPass = { code: string; reservationCode: string; passenger: string; document: string; cabin: string; seat: string; flight: ReceiptFlight };
+
+// qr es la matriz de módulos del código (true = negro), sin margen.
+export async function boardingPassPdf(pass: BoardingPass, qr: boolean[][]) {
+  const doc = await createSheet("TARJETA DE EMBARQUE", pass.code);
+  const { page, bold, regular } = doc;
+  fields(doc, [["Pasajero", pass.passenger], ["Documento", pass.document]]);
+  rule(doc);
+  route(doc, pass.flight);
+  fields(doc, [["Asiento", pass.seat], ["Clase", pass.cabin], ["Reserva", pass.reservationCode]]);
+  rule(doc);
+  const label = "CÓDIGO DE EMBARQUE";
+  page.drawText(label, { x: (doc.width - regular.widthOfTextAtSize(label, 8)) / 2, y: doc.y, size: 8, font: regular, color: MUTED });
+  const cell = 4;
+  const quiet = 4;
+  const size = (qr.length + quiet * 2) * cell;
+  const left = (doc.width - size) / 2;
+  const top = doc.y - 10;
+  qr.forEach((row, r) => row.forEach((dark, c) => {
+    if (dark) page.drawRectangle({ x: left + (c + quiet) * cell, y: top - (r + quiet + 1) * cell, width: cell, height: cell, color: INK });
+  }));
+  doc.y = top - size - 18;
+  const code = pdfText(pass.code);
+  page.drawText(code, { x: (doc.width - bold.widthOfTextAtSize(code, 12)) / 2, y: doc.y, size: 12, font: bold, color: INK });
+  doc.y -= 30;
+  note(doc, "Presentá esta tarjeta y tu documento de identidad en la puerta de embarque.");
   return doc.pdf.save();
 }

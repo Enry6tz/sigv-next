@@ -25,7 +25,7 @@ export function PassengerHeader({ signedIn, sprint, live }: { signedIn: boolean;
     <button className="passenger-menu-toggle" type="button" aria-label={menuOpen ? "Cerrar menú" : "Abrir menú"} aria-expanded={menuOpen} aria-controls="passenger-mobile-menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
   </header>
     {menuOpen && <nav id="passenger-mobile-menu" className="passenger-mobile-menu" aria-label="Menú del pasajero" onClick={() => setMenuOpen(false)}>
-      <Link href="/pasajero/buscar-vuelos">Buscar vuelos</Link>{canSeeReservations && <><Link href="/pasajero/mis-reservas">Mis reservas</Link><Link href="/pasajero/facturas">Facturas</Link></>}{sprint >= 3 && <><Link href="/pasajero/tickets">Tickets digitales</Link><Link href="/pasajero/notificaciones">Notificaciones</Link></>}
+      <Link href="/pasajero/buscar-vuelos">Buscar vuelos</Link>{canSeeReservations && <><Link href="/pasajero/mis-reservas">Mis reservas</Link><Link href="/pasajero/facturas">Facturas</Link></>}{sprint >= findModule("pasajero", "tickets")!.sprint && <Link href="/pasajero/tickets">Tickets digitales</Link>}{sprint >= findModule("pasajero", "notificaciones")!.sprint && <Link href="/pasajero/notificaciones">Notificaciones</Link>}
       {signedIn ? <><Link href="/pasajero/perfil">Mi perfil</Link><SignOutButton /></> : <><Link href="/ingresar">Iniciar sesión</Link><Link href="/registro">Registrarse</Link></>}
     </nav>}
     <nav className="passenger-bottom-nav" aria-label="Navegación móvil">

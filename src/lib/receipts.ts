@@ -3,12 +3,10 @@ import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { displayFlightCode } from "@/lib/flight-code";
 import { mailConfigured, sendMail, type MailAttachment } from "@/lib/mail";
-import { available } from "@/lib/sprint";
+import { appTimeZone, available } from "@/lib/sprint";
 import { eticketPdf, flightDate, invoicePdf, receiptMoney, type ReceiptLeg, type ReceiptPassenger } from "@/lib/receipt-pdf";
 
 type Json = Record<string, unknown>;
-
-const timeZone = process.env.APP_TIME_ZONE || "America/Argentina/Buenos_Aires";
 
 // PostgREST devuelve objeto o lista según detecte la relación como uno a uno.
 function one(value: unknown): Json | null {
@@ -62,7 +60,7 @@ export function invoiceFilename(leg: ReceiptLeg) {
 }
 
 export function renderInvoice(leg: ReceiptLeg) {
-  return invoicePdf(leg, timeZone);
+  return invoicePdf(leg, appTimeZone);
 }
 
 // Solo reservas pagadas: sin pago aprobado no se emiten e-tickets ni factura (US-019, criterio 6).

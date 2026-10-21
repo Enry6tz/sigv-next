@@ -7,6 +7,8 @@ import { displayFlightCode } from "@/lib/flight-code";
 import { adminFlightDto } from "@/lib/admin-flights";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 import { mailConfigured } from "@/lib/mail";
+import { appTimeZone } from "@/lib/sprint";
+import { boardingPassCode } from "@/lib/boarding-pass";
 import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
 export { ApiError } from "@/lib/api-errors";
 
@@ -38,6 +40,12 @@ function unwrap<T>(result: { data: T | null; error: { code?: string; message: st
   }
   return result.data as T;
 }
+
+const auditFields: Record<string, string> = {
+  status: "Estado", flight_date: "Fecha", departure: "Salida", arrival: "Llegada", origin: "Origen", destination: "Destino",
+  gate: "Puerta", economy: "Tarifa Economy", first: "Tarifa Primera", capacity_economy: "Capacidad Economy",
+  capacity_first: "Capacidad Primera", archived_at: "Archivado", reservas_afectadas: "Reservas afectadas",
+};
 
 function flightDto(row: Json) {
   return {
@@ -185,8 +193,13 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   if (resource === "flight-logs") {
     await requireRole(client, ["admin"]);
     const rows = unwrap(await client.from("flight_change_logs").select("id,flight_id,actor_id,field,old_value,new_value,changed_at").order("changed_at", { ascending: false }).limit(200));
-    return rows.map((row: Json) => ({ id: row.id, flightId: row.flight_id, actorId: row.actor_id,
-      field: row.field, oldValue: row.old_value, newValue: row.new_value, changedAt: row.changed_at }));
+    const actorIds = [...new Set(rows.map((row: Json) => row.actor_id).filter(Boolean))];
+    const actors = actorIds.length ? unwrap(await client.from("profiles").select("user_id,name,email").in("user_id", actorIds)) : [];
+    const actorName = new Map(actors.map((row: Json) => [row.user_id, row.name ? `${row.name} (${row.email})` : row.email]));
+    const when = new Intl.DateTimeFormat("es-AR", { timeZone: appTimeZone, dateStyle: "short", timeStyle: "medium" });
+    return rows.map((row: Json) => ({ changedAt: when.format(new Date(String(row.changed_at))), flightId: row.flight_id,
+      actor: row.actor_id ? actorName.get(row.actor_id) ?? row.actor_id : "Sistema",
+      field: auditFields[String(row.field)] ?? row.field, oldValue: row.old_value, newValue: row.new_value }));
   }
   if (resource === "notifications") {
     await requireUser(client);
@@ -197,12 +210,12 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     await requireRole(client, ["admin", "mostrador"]);
     const rows = unwrap(await client.from("reservations").select("code,flight_id,status,reservation_passengers(id,first_name,last_name,document,seat,baggage_kg,checked_in_at)").eq("status", "Confirmada"));
     return rows.flatMap((row: Json) => (row.reservation_passengers as Json[]).map((person) => ({
-      reservationCode: row.code, flightId: row.flight_id,
+      id: person.id, reservationCode: row.code, flightId: row.flight_id,
       passenger: `${person.first_name} ${person.last_name}`,
       document: person.document, seat: person.seat, baggageKg: person.baggage_kg,
       checkedIn: Boolean(person.checked_in_at),
       status: person.checked_in_at ? "Completado" : "Pendiente",
-      boardingPass: person.checked_in_at ? `BP-${String(person.id).replaceAll("-", "").slice(0, 10).toUpperCase()}` : null,
+      boardingPass: person.checked_in_at ? boardingPassCode(String(person.id)) : null,
     }))).filter((row) => resource !== "boarding-passes" || row.checkedIn);
   }
   if (resource === "tickets") {
@@ -215,7 +228,9 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     const allFlights = await flights(client);
     const allReservations = await reservations(client);
     return allFlights.map((row) => ({
-      flightId: row.id, kind: row.status === "Cancelado" ? "Cancelación" : row.status === "Retrasado" ? "Retraso" : "Sin contingencia",
+      flightId: row.id, code: row.code, origin: row.origin, destination: row.destination,
+      date: row.date, departure: row.departure, arrival: row.arrival,
+      kind: row.status === "Cancelado" ? "Cancelación" : row.status === "Retrasado" ? "Retraso" : "Sin contingencia",
       affectedBookings: allReservations.filter((booking) => booking.flightId === row.id && booking.status !== "Cancelada").length,
       status: row.status,
     }));
@@ -493,6 +508,10 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     if (payload.date !== undefined) updates.flight_date = text(payload.date);
     if (payload.departure !== undefined) updates.departure = text(payload.departure);
     if (payload.arrival !== undefined) updates.arrival = text(payload.arrival);
+    if ((updates.flight_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(updates.flight_date)))
+      || [updates.departure, updates.arrival].some((value) => value !== undefined && !/^\d{2}:\d{2}$/.test(String(value))))
+      throw new ApiError("Ingresá la nueva fecha y los horarios de salida y llegada");
+    if (updates.departure !== undefined && updates.departure === updates.arrival) throw new ApiError("Los horarios de salida y llegada deben ser diferentes");
     return flightDto(unwrap(await client.from("flights").update(updates).eq("id", text(payload.flightId)).select("*").single()));
   }
   if (resource === "users" && method === "PATCH") {

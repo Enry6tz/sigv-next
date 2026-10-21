@@ -26,7 +26,7 @@ export const modules: Module[] = [
   { slug: "facturas", label: "Comprobantes", role: "pasajero", sprint: 1, description: "Comprobantes asociados a pagos de prueba.", us: "—", rf: "RF-004", resource: "invoices" },
   { slug: "mis-reservas", label: "Mis reservas", role: "pasajero", sprint: 1, description: "Reservas, pasajes y estados de vuelo.", us: "US-011", rf: "RF-003, RF-011", resource: "reservations" },
   { slug: "perfil", label: "Mi perfil", role: "pasajero", sprint: 1, description: "Datos personales y de contacto del pasajero.", us: "US-011", rf: "RF-009", resource: "profile" },
-  { slug: "notificaciones", label: "Notificaciones", role: "pasajero", sprint: 3, description: "Avisos por cambios de horario y cancelaciones.", us: "—", rf: "RF-005", resource: "notifications" },
+  { slug: "notificaciones", label: "Notificaciones", role: "pasajero", sprint: 2, description: "Avisos por cambios de horario y cancelaciones.", us: "US-023", rf: "RF-005", resource: "notifications" },
   { slug: "tickets", label: "Tickets digitales", role: "pasajero", sprint: 3, description: "Consulta de tickets en una vista adaptable a móvil.", us: "—", rf: "RF-007, RF-008", resource: "tickets" },
   { slug: "inicio", label: "Panel operativo", role: "admin", sprint: 1, description: "Resumen de vuelos, capacidad y accesos de administración.", us: "US-001–005", rf: "RF-001", resource: "dashboard" },
   { slug: "vuelos", label: "Vuelos", role: "admin", sprint: 1, description: "Programaciones, estados, filtros y edición de vuelos.", us: "US-001, US-003–005", rf: "RF-001, RF-011", resource: "flights" },
@@ -37,11 +37,11 @@ export const modules: Module[] = [
   { slug: "configuraciones", label: "Configuración por clase", role: "admin", sprint: 1, description: "Capacidad y tarifa base por programación.", us: "US-002", rf: "RF-001", resource: "configurations" },
   { slug: "capacidades", label: "Capacidades", role: "admin", sprint: 1, description: "Inventario Economy y Primera por vuelo.", us: "US-002", rf: "RF-001", resource: "capacities" },
   { slug: "tarifas", label: "Tarifas", role: "admin", sprint: 1, description: "Precios por clase y vigencia comercial.", us: "US-002", rf: "RF-001", resource: "fares" },
-  { slug: "contingencias", label: "Contingencias", role: "admin", sprint: 2, description: "Reprogramación, cancelación y pasajeros afectados.", us: "US-004, US-005", rf: "RF-011", resource: "disruptions" },
+  { slug: "contingencias", label: "Contingencias", role: "admin", sprint: 2, description: "Reprogramación, cancelación y pasajeros afectados.", us: "US-004, US-005, US-023", rf: "RF-011", resource: "disruptions" },
   { slug: "asientos", label: "Asientos", role: "admin", sprint: 2, description: "Disponibilidad, ocupación y bloqueo de asientos.", us: "US-002", rf: "RF-010", resource: "seats" },
   { slug: "usuarios", label: "Usuarios", role: "admin", sprint: 1, description: "Cuentas y roles de pasajeros, mostrador y administración.", us: "US-008–014", rf: "RF-009", resource: "users" },
   { slug: "reportes", label: "Reportes", role: "admin", sprint: 3, description: "Ocupación por vuelo, clase y fechas.", us: "—", rf: "RF-006", resource: "reports" },
-  { slug: "auditoria", label: "Auditoría", role: "admin", sprint: 3, description: "Historial de modificaciones de vuelos.", us: "—", rf: "RNF-008", resource: "flight-logs" },
+  { slug: "auditoria", label: "Auditoría", role: "admin", sprint: 2, description: "Historial de modificaciones de vuelos y reservas afectadas.", us: "US-023", rf: "RNF-008", resource: "flight-logs" },
   { slug: "inicio", label: "Panel de mostrador", role: "mostrador", sprint: 2, description: "Vuelos del día y flujo de atención presencial.", us: "US-012", rf: "RF-010", resource: "dashboard" },
   { slug: "manifiesto", label: "Manifiesto", role: "mostrador", sprint: 2, description: "Pasajeros confirmados de cada vuelo.", us: "—", rf: "RF-010", resource: "manifest" },
   { slug: "check-in", label: "Check-in", role: "mostrador", sprint: 2, description: "Identificación, asiento y equipaje despachado.", us: "—", rf: "RF-010", resource: "check-in" },
@@ -54,8 +54,8 @@ export const resourceSprint: Record<string, 1 | 2 | 3> = {
   aircraft: 1, schedules: 1, frequencies: 1, configurations: 1,
   users: 1, profile: 1, auth: 1, reservations: 1, payments: 1,
   invoices: 1, seats: 2, receipts: 2,
-  disruptions: 2, manifest: 2, "check-in": 2, "boarding-passes": 2,
-  notifications: 3, tickets: 3, reports: 3, "flight-logs": 3,
+  disruptions: 2, manifest: 2, "check-in": 2, "boarding-passes": 2, notifications: 2, "flight-logs": 2,
+  tickets: 3, reports: 3,
 };
 
 export function roleModules(role: Role, sprint: number) {

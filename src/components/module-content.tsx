@@ -9,6 +9,7 @@ import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
 import { ActionNotice, type Notice } from "./action-notice";
 import { mutate } from "@/lib/mutations";
+import { boardingPassPayload, qrMatrix } from "@/lib/boarding-pass";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
@@ -25,6 +26,8 @@ import {
 
 
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
+// Fechas de vuelo YYYY-MM-DD sin pasar por Date, que las corre un día según la zona horaria.
+const displayDate = (value?: string | null) => value ? value.split("-").reverse().join("/") : "—";
 
 function downloadFile(filename: string, contents: string, mime: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: mime }));
@@ -52,10 +55,10 @@ function useMock<T>(resource: string) {
 }
 
 function Status({ value }: { value: string }) {
-  return <span className={`status ${value === "Cancelado" ? "danger" : value === "Retrasado" ? "warning" : "ok"}`}><span aria-hidden="true">●</span>{value}</span>;
+  return <span className={`status ${value === "Cancelado" ? "danger" : ["Retrasado", "A reagendar", "A reembolsar"].includes(value) ? "warning" : "ok"}`}><span aria-hidden="true">●</span>{value}</span>;
 }
 
-function Payment({ reservationCode, returnReservation, live }: { reservationCode: string; returnReservation?: string; live: boolean }) {
+function Payment({ reservationCode, returnReservation }: { reservationCode: string; returnReservation?: string }) {
   const [message, setMessage] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [paid, setPaid] = useState(false);
@@ -108,6 +111,8 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
     setMessage(null);
     const data = Object.fromEntries(new FormData(event.currentTarget));
     if (returnReservation) data.returnReservationCode = returnReservation;
+    // sigv_demo_payment exige uno de sus métodos de prueba; este formulario es el de tarjeta.
+    data.method = "Tarjeta de prueba";
     data.cardNumber = normalizeCardNumber(cardNumber);
     data.cardHolder = cardHolder.trim();
     data.cardExpiry = cardExpiry;
@@ -140,15 +145,15 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
             <div><strong>Estado</strong><span>Pagado</span></div>
           </div>
           <div className="action-row">
-            <button className="button dark" disabled={!live}>Descargar Boarding Pass</button>
+            <Link className="button dark" href="/pasajero/facturas">Descargar E-ticket y factura</Link>
             <Link className="button small" href="/pasajero/mis-reservas">Ver mis reservas</Link>
           </div>
+          <p className="form-hint">La tarjeta de embarque se emite en el mostrador al hacer el check-in.</p>
         </section>
         <aside className="panel summary-panel">
           <h2>Resumen del pago</h2>
           <p>El pago se procesó correctamente y tu reserva está confirmada.</p>
           {receiptEmail && <p>Te enviamos el e-ticket de cada pasajero y la factura a <strong>{receiptEmail}</strong>.</p>}
-          <Link className="button small" href="/pasajero/facturas">Ver comprobantes</Link>
           <p className="form-hint">No se procesó dinero real. Esta es una simulación de prueba.</p>
         </aside>
       </div>
@@ -227,21 +232,27 @@ function CheckIn({ live }: { live: boolean }) {
     if (!reservationCode || !document) return;
     setBusy(true); setMessage(null); setReservation(null); setSeats(null); setSelectedSeat(null);
     try {
+      const code = reservationCode.trim().toUpperCase();
+      // La reserva se busca primero para explicar por qué no admite check-in (criterio 5).
+      const resResponse = await fetch("/api/data/reservations", { cache: "no-store" });
+      if (!resResponse.ok) throw new Error("No se pudo obtener el detalle de la reserva.");
+      const resBody = await resResponse.json();
+      const resRows = (resBody.data ?? []) as { code: string; cabin: string; status: string }[];
+      const resRow = resRows.find((r) => r.code === code);
+      if (!resRow) throw new Error("Reserva no encontrada.");
+      if (resRow.status !== "Confirmada") {
+        const reason = ["A reagendar", "A reembolsar"].includes(resRow.status) ? " porque el vuelo fue cancelado" : "";
+        throw new Error(`No se puede hacer el check-in: la reserva está ${resRow.status}${reason}.`);
+      }
+      const cabin = resRow.cabin;
+
       const response = await fetch("/api/data/manifest", { cache: "no-store" });
       if (!response.ok) throw new Error("No se pudo buscar la reserva.");
       const body = await response.json();
       const rows = (body.data ?? []) as ManifestRow[];
-      const row = rows.find((r) => r.reservationCode === reservationCode && r.document === document);
-      if (!row) throw new Error("Reserva no encontrada.");
+      const row = rows.find((r) => r.reservationCode === code && r.document === document.trim());
+      if (!row) throw new Error("El documento no corresponde a un pasajero de esta reserva.");
       if (row.checkedIn) throw new Error("El pasajero ya tiene check-in.");
-
-      // Obtener cabina de la reserva
-      const resResponse = await fetch("/api/data/reservations", { cache: "no-store" });
-      if (!resResponse.ok) throw new Error("No se pudo obtener el detalle de la reserva.");
-      const resBody = await resResponse.json();
-      const resRows = (resBody.data ?? []) as { code: string; cabin: string }[];
-      const resRow = resRows.find((r) => r.code === reservationCode);
-      const cabin = resRow?.cabin ?? "Economy";
 
       setReservation({
         code: row.reservationCode,
@@ -351,10 +362,13 @@ function CheckIn({ live }: { live: boolean }) {
   );
 }
 
-type ManifestRow = { reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
+type ManifestRow = { id?: string; reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
+type FlightOption = { id: string; code: string; origin: string; destination: string; date: string; departure: string; arrival: string; status: string };
+
+const flightLabel = (flight: FlightOption) => `${flight.code} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)} ${flight.departure}`;
 
 function Manifest() {
-  const [flights, setFlights] = useState<{ id: string; origin: string; destination: string; flight_date: string }[] | null>(null);
+  const [flights, setFlights] = useState<FlightOption[] | null>(null);
   const [manifest, setManifest] = useState<ManifestRow[] | null>(null);
   const [error, setError] = useState("");
   const [selectedFlight, setSelectedFlight] = useState("");
@@ -367,7 +381,7 @@ function Manifest() {
       .then(async (response) => {
         if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudieron cargar los vuelos."));
         const body = await response.json();
-        setFlights((body.data ?? []) as { id: string; origin: string; destination: string; flight_date: string }[]);
+        setFlights((body.data ?? []) as FlightOption[]);
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
@@ -387,51 +401,54 @@ function Manifest() {
   }, [selectedFlight, revision]);
 
   const flight = flights?.find((f) => f.id === selectedFlight);
-  const rows = (manifest || []).filter((row) => {
-    if (row.flightId !== selectedFlight) return false;
-    const q = search.toLowerCase();
-    return row.passenger.toLowerCase().includes(q) || row.document.toLowerCase().includes(q) || row.reservationCode.toLowerCase().includes(q);
-  });
+  const passengers = (manifest || []).filter((row) => row.flightId === selectedFlight);
+  const q = search.trim().toLowerCase();
+  const rows = passengers.filter((row) => row.passenger.toLowerCase().includes(q) || row.document.toLowerCase().includes(q) || row.reservationCode.toLowerCase().includes(q));
 
   return <section className="panel">
-    <div className="panel-title"><div><p className="kicker">MOSTRADOR / MANIFIESTO</p><h2>Manifiesto de pasajeros</h2></div></div>
+    <div className="panel-title"><div><p className="kicker">MOSTRADOR / MANIFIESTO</p><h2>Manifiesto de pasajeros</h2></div>{selectedFlight && <button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button>}</div>
     {error && <p role="alert" className="error-text">{error}</p>}
-    {!flights && <p role="status">Cargando vuelos…</p>}
-    {flights && !selectedFlight && <div className="form-row"><label>Vuelo<select onChange={(event) => { setSelectedFlight(event.target.value); setSearch(""); }}><option value="">Seleccioná un vuelo</option>{flights.map((f) => <option key={f.id} value={f.id}>{f.id} · ${f.origin} → ${f.destination} (${new Date(f.flight_date).toLocaleDateString("es-AR")})</option>)}</select></label></div>}
-    {selectedFlight && (
-      <>
-        <div className="form-row" style={{ marginBottom: 16 }}>
-          <label>Buscar por DNI, nombre o reserva<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="DNI, apellido o código de reserva…" /></label>
-          <button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button>
-        </div>
-        {flight && <div style={{ marginBottom: 12, color: "#777", fontSize: "12px" }}>{flight.origin} → ${flight.destination} · ${new Date(flight.flight_date).toLocaleDateString("es-AR")} · ${rows.length} pasajero${rows.length !== 1 ? "s" : ""} confirmado${rows.length !== 1 ? "s" : ""}</div>}
-        {rows.length === 0 ? <div className="empty-inline">No hay pasajeros confirmados para este vuelo con los criterios de búsqueda.</div> : (
-          <div className="record-grid">
-            {rows.map((row) => (
-              <article className="record-card" key={`${row.reservationCode}-${row.document}`}>
-                <strong>{row.reservationCode}</strong>
-                <p>{row.passenger}</p>
-                <p>Documento: {row.document}</p>
-                <p>Asiento: {row.seat ?? "—"} · Equipaje: {row.baggageKg ?? "—"} kg</p>
-                <p><Status value={row.checkedIn ? "Completado" : "Pendiente"} /></p>
-              </article>
-            ))}
-          </div>
-        )}
-      </>
-    )}
+    {!flights && !error && <p role="status">Cargando vuelos…</p>}
+    {flights && <div className="form-row" style={{ marginBottom: 16 }}>
+      <label>Vuelo<select value={selectedFlight} onChange={(event) => { setSelectedFlight(event.target.value); setSearch(""); setManifest(null); }}><option value="">Seleccioná un vuelo</option>{flights.map((f) => <option key={f.id} value={f.id}>{flightLabel(f)}</option>)}</select></label>
+      {selectedFlight && <label>Buscar por DNI, nombre o reserva<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="DNI, apellido o código de reserva…" /></label>}
+    </div>}
+    {flights?.length === 0 && <div className="empty-inline">No hay vuelos programados.</div>}
+    {flight && <p className="form-hint">{flightLabel(flight)} → {flight.arrival} · <Status value={flight.status} /> · {passengers.length} pasajero{passengers.length !== 1 ? "s" : ""} confirmado{passengers.length !== 1 ? "s" : ""}</p>}
+    {selectedFlight && !manifest && !error && <p role="status">Cargando manifiesto…</p>}
+    {selectedFlight && manifest && (passengers.length === 0
+      ? <div className="empty-inline">El manifiesto de este vuelo está vacío: todavía no hay pasajeros con reserva confirmada.</div>
+      : rows.length === 0
+        ? <div className="empty-inline">No se encontraron pasajeros para “{search}” en este vuelo.</div>
+        : <div className="record-grid">
+          {rows.map((row) => (
+            <article className="record-card" key={row.id ?? `${row.reservationCode}-${row.document}`}>
+              <strong>{row.reservationCode}</strong>
+              <p>{row.passenger}</p>
+              <p>Documento: {row.document}</p>
+              <p>Asiento: {row.seat ?? "—"} · Equipaje: {row.baggageKg ?? "—"} kg</p>
+              <p><Status value={row.checkedIn ? "Completado" : "Pendiente"} /></p>
+            </article>
+          ))}
+        </div>)}
   </section>;
 }
 
 type EditableRow = Record<string, string | number | null>;
 
-type BoardingPassRow = { reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
+function QrCode({ value, size = 168 }: { value: string; size?: number }) {
+  const cells = qrMatrix(value);
+  const quiet = 4;
+  const extent = cells.length + quiet * 2;
+  const path = cells.flatMap((row, r) => row.map((dark, c) => dark ? `M${c + quiet} ${r + quiet}h1v1h-1z` : "")).join("");
+  return <svg viewBox={`0 0 ${extent} ${extent}`} width={size} height={size} role="img" aria-label="Código QR de embarque" shapeRendering="crispEdges"><rect width={extent} height={extent} fill="#fff" /><path d={path} fill="#202020" /></svg>;
+}
 
 function BoardingPass() {
-  const [passes, setPasses] = useState<BoardingPassRow[] | null>(null);
-  const [flights, setFlights] = useState<{ id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string }[] | null>(null);
+  const [passes, setPasses] = useState<ManifestRow[] | null>(null);
+  const [flights, setFlights] = useState<FlightOption[] | null>(null);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<BoardingPassRow & { origin: string; destination: string; flight_date: string; departure: string; arrival: string } | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
@@ -440,7 +457,7 @@ function BoardingPass() {
       .then(async (response) => {
         if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudo cargar el listado de pases."));
         const body = await response.json();
-        setPasses((body.data ?? []) as BoardingPassRow[]);
+        setPasses((body.data ?? []) as ManifestRow[]);
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
@@ -452,33 +469,23 @@ function BoardingPass() {
       .then(async (response) => {
         if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudieron cargar los vuelos."));
         const body = await response.json();
-        setFlights((body.data ?? []) as { id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string }[]);
+        setFlights((body.data ?? []) as FlightOption[]);
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
   }, []);
 
-  function qrMatrix(code: string, size: number) {
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) hash = ((hash << 5) - hash + code.charCodeAt(i)) | 0;
-    const cells: boolean[][] = [];
-    for (let r = 0; r < size; r++) {
-      const row: boolean[] = [];
-      for (let c = 0; c < size; c++) {
-        hash = ((hash << 13) ^ (hash >> 17)) | 0;
-        row.push(((hash >> (c % 5)) & 1) === 1);
-      }
-      cells.push(row);
-    }
-    return cells;
-  }
+  // Solo hay pase con check-in y asiento confirmado (criterio 3).
+  const passList = (passes ?? []).filter((p) => p.checkedIn && p.boardingPass && p.seat);
+  const passKey = (row: ManifestRow) => row.id ?? row.boardingPass ?? `${row.reservationCode}-${row.document}`;
+  const selected = passList.find((row) => passKey(row) === selectedId);
 
   if (selected) {
     const flight = flights?.find((f) => f.id === selected.flightId);
-    const cells = qrMatrix(selected.boardingPass ?? selected.reservationCode, 21);
+    const payload = boardingPassPayload({ code: selected.boardingPass ?? "", reservationCode: selected.reservationCode, flightCode: flight?.code ?? selected.flightId, date: flight?.date ?? "", seat: selected.seat ?? "" });
     return (
       <section className="panel" style={{ maxWidth: "700px", margin: "0 auto" }}>
-        <div className="panel-title"><div><p className="kicker">TARJETA DE EMBARQUE</p><h2>Boarding Pass</h2></div><button className="button small" onClick={() => setSelected(null)}>Volver al listado</button></div>
+        <div className="panel-title"><div><p className="kicker">TARJETA DE EMBARQUE</p><h2>Boarding Pass</h2></div><button className="button small" onClick={() => setSelectedId(null)}>Volver al listado</button></div>
         <div style={{ border: "2px solid #222", padding: "24px", background: "#fff", fontFamily: "Consolas, monospace" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
             <div>
@@ -491,8 +498,8 @@ function BoardingPass() {
           </div>
           <div style={{ borderBottom: "1px solid #ddd", paddingBottom: "16px", marginBottom: "16px" }}>
             <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase" }}>Vuelo</p>
-            <p style={{ margin: 0, fontSize: "16px", fontWeight: "700" }}>{flight ? `${flight.origin} → ${flight.destination}` : selected.flightId}</p>
-            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#555" }}>{flight ? `${new Date(flight.flight_date).toLocaleDateString("es-AR")} · ${flight.departure} → ${flight.arrival}` : ""}</p>
+            <p style={{ margin: 0, fontSize: "16px", fontWeight: "700" }}>{flight ? `${flight.code} · ${flight.origin} → ${flight.destination}` : selected.flightId}</p>
+            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#555" }}>{flight ? `${displayDate(flight.date)} · ${flight.departure} → ${flight.arrival}` : ""}</p>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
             <div>
@@ -516,20 +523,13 @@ function BoardingPass() {
           </div>
           <div style={{ marginTop: "24px", display: "flex", flexDirection: "column", alignItems: "center" }}>
             <p style={{ margin: 0, fontSize: "10px", color: "#777", textTransform: "uppercase", marginBottom: "8px" }}>Código QR de embarque</p>
-            <div style={{ display: "grid", gap: "2px" }}>
-              {cells.map((row, r) => (
-                <div key={r} style={{ display: "flex", gap: "2px" }}>
-                  {row.map((cell, c) => (
-                    <div key={c} style={{ width: "12px", height: "12px", background: cell ? "#222" : "#eee" }} />
-                  ))}
-                </div>
-              ))}
-            </div>
+            <QrCode value={payload} />
           </div>
-          <div style={{ marginTop: "24px", textAlign: "center" }}>
+          <div className="action-row" style={{ marginTop: "24px", justifyContent: "center" }}>
             <button className="button dark" onClick={() => window.print()}>Imprimir Tarjeta de Embarque</button>
+            {selected.id && <a className="button" href={`/api/boarding-passes/${selected.id}`}>Descargar PDF</a>}
           </div>
-          <p style={{ marginTop: "16px", fontSize: "11px", color: "#777" }}>Presenta esta tarjeta en la puerta de embarque junto con tu documento de identidad.</p>
+          <p style={{ marginTop: "16px", fontSize: "11px", color: "#777" }}>Presenta esta tarjeta en la puerta de embarque junto con tu documento de identidad. El PDF se puede entregar al pasajero como tarjeta digital.</p>
         </div>
       </section>
     );
@@ -537,8 +537,6 @@ function BoardingPass() {
 
   if (error) return <section className="panel"><p role="alert" className="error-text">{error}</p></section>;
   if (!passes) return <section className="panel"><p role="status">Cargando pases de embarque…</p></section>;
-
-  const passList = passes.filter((p) => p.checkedIn && p.boardingPass);
 
   return (
     <section className="panel">
@@ -550,13 +548,10 @@ function BoardingPass() {
           {passList.map((row) => {
             const flight = flights?.find((f) => f.id === row.flightId);
             return (
-              <article className="record-card" key={row.reservationCode} style={{ cursor: "pointer" }} onClick={() => {
-                const f = flights?.find((fl) => fl.id === row.flightId);
-                setSelected({ ...row, origin: f?.origin ?? "", destination: f?.destination ?? "", flight_date: f?.flight_date ?? "", departure: f?.departure ?? "", arrival: f?.arrival ?? "" });
-              }}>
+              <article className="record-card" key={passKey(row)} style={{ cursor: "pointer" }} onClick={() => setSelectedId(passKey(row))}>
                 <strong>{row.reservationCode}</strong>
                 <p>{row.passenger}</p>
-                <p>Vuelo: {flight ? `${flight.origin} → ${flight.destination}` : row.flightId}</p>
+                <p>Vuelo: {flight ? `${flight.code} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)}` : row.flightId}</p>
                 <p>Asiento: {row.seat}</p>
                 <p>Pase: {row.boardingPass}</p>
               </article>
@@ -568,15 +563,39 @@ function BoardingPass() {
   );
 }
 
-type EditableResource = "airports" | "capacities" | "fares" | "disruptions" | "users" | "notifications";
+type EditableResource = "airports" | "capacities" | "fares" | "users" | "notifications";
 
-type DisruptionRow = { flightId: string; kind: string; affectedBookings: number; status: string };
+type DisruptionRow = { flightId: string; code?: string; origin?: string; destination?: string; date?: string; departure?: string; arrival?: string; kind: string; affectedBookings: number; status: string };
+type FlightChange = { row: DisruptionRow; status: string; date?: string; departure?: string; arrival?: string };
+
+const disruptionLimit = 60;
+
+function changeTitle({ row, status, date, departure, arrival }: FlightChange) {
+  const flight = `${row.code ?? row.flightId}${row.date ? ` del ${displayDate(row.date)}` : ""}`;
+  if (date) return `¿Reprogramar el vuelo ${flight} al ${displayDate(date)}, ${departure} → ${arrival}?`;
+  if (status === "Cancelado") return `¿Cancelar el vuelo ${flight}?`;
+  if (status === "Retrasado") return `¿Marcar el vuelo ${flight} como retrasado?`;
+  return `¿Volver a activo el vuelo ${flight}?`;
+}
+
+function changeEffect({ row, status, date }: FlightChange) {
+  const bookings = `${row.affectedBookings} reserva${row.affectedBookings !== 1 ? "s" : ""}`;
+  if (status === "Cancelado") return `Afecta a ${bookings}. Cada reserva confirmada pasa a 'A reagendar' si la ruta tiene otro vuelo con lugar en su clase, o a 'A reembolsar' si no lo tiene; las pendientes de pago se cancelan. Los pasajeros reciben un aviso con sus opciones.`;
+  if (date) return `Afecta a ${bookings}. Conservan sus asientos en el nuevo horario; cada pasajero recibe un aviso y puede cancelar desde Mis reservas si no acepta el cambio, liberando sus asientos.`;
+  if (status === "Retrasado") return `Se avisará la demora a los pasajeros de ${bookings}.`;
+  return `Se avisará a los pasajeros de ${bookings} que el vuelo vuelve a operar normalmente.`;
+}
 
 function Disruptions() {
   const [rows, setRows] = useState<DisruptionRow[] | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [message, setMessage] = useState<Notice>(null);
+  const [query, setQuery] = useState("");
+  const [date, setDate] = useState("");
+  const [rescheduling, setRescheduling] = useState<string | null>(null);
+  const [pending, setPending] = useState<FlightChange | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -590,51 +609,92 @@ function Disruptions() {
     return () => controller.abort();
   }, [revision]);
 
-  async function changeStatus(flightId: string, status: string) {
+  async function confirm() {
+    if (!pending || busy) return;
+    setBusy(true);
     setMessage(null);
-    const result = await mutate("disruptions", "PATCH", { flightId, status });
+    const { row, ...change } = pending;
+    const result = await mutate("disruptions", "PATCH", { flightId: row.flightId, ...change });
+    setBusy(false);
     if (result.ok) {
-      setMessage({ ok: true, text: `Estado del vuelo ${flightId} actualizado a ${status}.` });
+      setMessage({ ok: true, text: `Vuelo ${row.code ?? row.flightId} actualizado. Los pasajeros afectados fueron notificados y el cambio quedó registrado en Auditoría.` });
+      setPending(null);
       setRevision((v) => v + 1);
     } else {
       setMessage({ ok: false, text: result.error });
     }
   }
 
-  const statusLabel: Record<string, string> = { Activo: "Sin contingencia", Retrasado: "Retraso", Cancelado: "Cancelación" };
+  function reschedule(event: FormEvent<HTMLFormElement>, row: DisruptionRow) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setPending({ row, status: row.status, date: String(form.get("date")), departure: String(form.get("departure")), arrival: String(form.get("arrival")) });
+    setRescheduling(null);
+  }
+
+  const q = query.trim().toLowerCase();
+  const matches = (rows ?? []).filter((row) => (!date || row.date === date)
+    && (!q || [row.code, row.flightId, row.origin, row.destination].some((value) => value?.toLowerCase().includes(q))));
+  const visible = matches.slice(0, disruptionLimit);
 
   return (
     <section className="panel">
       <div className="panel-title"><div><p className="kicker">GESTIÓN DE ESTADOS</p><h2>Cambiar estado de vuelo</h2></div><button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button></div>
       {error && <p role="alert" className="error-text">{error}</p>}
-      {!rows && <p role="status">Cargando contingencias…</p>}
-      {rows && rows.length === 0 && <div className="empty-inline">No hay vuelos registrados.</div>}
-      {rows && rows.length > 0 && (
+      {!rows && !error && <p role="status">Cargando contingencias…</p>}
+      {rows && <div className="form-row" style={{ marginBottom: 16 }}>
+        <label>Buscar vuelo<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Código, origen o destino" /></label>
+        <label>Fecha<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+      </div>}
+      <ActionNotice notice={message} />
+      {rows && matches.length === 0 && <div className="empty-inline">No hay vuelos que coincidan con la búsqueda.</div>}
+      {matches.length > visible.length && <p className="form-hint">Mostrando {visible.length} de {matches.length} vuelos. Filtrá por código o fecha para encontrar el que buscás.</p>}
+      {visible.length > 0 && (
         <div className="record-grid">
-          {rows.map((row) => (
-            <article className="record-card" key={row.flightId}>
-              <strong>{row.flightId}</strong>
-              <p>Estado: {row.status}</p>
-              <p>Contingencia: {statusLabel[row.kind] ?? row.kind}</p>
-              <p>Reservas afectadas: {row.affectedBookings}</p>
-              <div className="action-row">
-                <select
-                  value={row.status}
-                  onChange={(event) => void changeStatus(row.flightId, event.target.value)}
-                  disabled={row.status === "Cancelado" && row.affectedBookings > 0}
-                >
-                  <option value="Activo">Activo</option>
-                  <option value="Retrasado">Retrasado</option>
-                  <option value="Cancelado">Cancelado</option>
-                </select>
-                {row.status === "Cancelado" && row.affectedBookings > 0 && <span className="muted" style={{ fontSize: "11px" }}>(reservas reagendadas)</span>}
-              </div>
-              {message && <ActionNotice notice={message} />}
-            </article>
-          ))}
+          {visible.map((row) => {
+            const confirming = pending?.row.flightId === row.flightId;
+            return (
+              <article className="record-card" key={row.flightId}>
+                <strong>{row.code ?? row.flightId}{row.origin ? ` · ${row.origin} → ${row.destination}` : ""}</strong>
+                {row.date && <p>{displayDate(row.date)} · {row.departure} → {row.arrival}</p>}
+                <p><Status value={row.status} /></p>
+                <p>Reservas afectadas: {row.affectedBookings}</p>
+                {confirming ? (
+                  <div className="inline-form">
+                    <p><strong>{changeTitle(pending)}</strong></p>
+                    <p className="form-hint">{changeEffect(pending)}</p>
+                    <div className="action-row">
+                      <button className="button dark" type="button" disabled={busy} onClick={() => void confirm()}>{busy ? "Guardando…" : "Confirmar"}</button>
+                      <button className="button" type="button" disabled={busy} onClick={() => setPending(null)}>Volver</button>
+                    </div>
+                  </div>
+                ) : rescheduling === row.flightId ? (
+                  <form className="stack-form inline-form" onSubmit={(event) => reschedule(event, row)}>
+                    <label>Nueva fecha<input name="date" type="date" defaultValue={row.date} required /></label>
+                    <div className="form-row">
+                      <label>Salida<input name="departure" type="time" defaultValue={row.departure} required /></label>
+                      <label>Llegada<input name="arrival" type="time" defaultValue={row.arrival} required /></label>
+                    </div>
+                    <div className="action-row">
+                      <button className="button dark" type="submit">Revisar cambio</button>
+                      <button className="button" type="button" onClick={() => setRescheduling(null)}>Cerrar</button>
+                    </div>
+                  </form>
+                ) : row.status === "Cancelado" ? (
+                  <p className="form-hint">Vuelo cancelado: sus reservas quedaron &apos;A reagendar&apos; o &apos;A reembolsar&apos;.</p>
+                ) : (
+                  <div className="action-row">
+                    <button className="button small" type="button" onClick={() => { setPending(null); setRescheduling(row.flightId); }}>Reprogramar</button>
+                    <button className="button small" type="button" onClick={() => setPending({ row, status: row.status === "Retrasado" ? "Activo" : "Retrasado" })}>{row.status === "Retrasado" ? "Volver a activo" : "Marcar retrasado"}</button>
+                    <button className="button small" type="button" onClick={() => setPending({ row, status: "Cancelado" })}>Cancelar vuelo</button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
-      <p className="form-hint">Al cancelar un vuelo, sus reservas pasan a &apos;A reagendar&apos; o &apos;A reembolsar&apos; y los pasajeros reciben un aviso automático. Los cambios quedan registrados en auditoría.</p>
+      <p className="form-hint">Cada cambio se confirma antes de aplicarse, notifica a los pasajeros afectados y queda registrado en Auditoría con el usuario, la fecha y las reservas afectadas.</p>
     </section>
   );
 }
@@ -701,7 +761,7 @@ function Comprobantes({ canEmail }: { canEmail: boolean }) {
               <article className="record-card" key={inv.number}>
                 <strong>Factura {inv.number}</strong>
                 <p>Reserva: {inv.reservationCode}{res && res.status !== "Confirmada" ? ` · ${res.status}` : ""}</p>
-                <p>Vuelo: {flight ? `${flight.code} · ${flight.origin} → ${flight.destination} · ${flight.date.split("-").reverse().join("/")} ${flight.departure}` : res?.flightId ?? "—"}</p>
+                <p>Vuelo: {flight ? `${flight.code} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)} ${flight.departure}` : res?.flightId ?? "—"}</p>
                 <p>Clase: {res?.cabin ?? "—"}</p>
                 <p>Monto: {money(inv.amount)}</p>
                 <p>Emitida: {new Date(inv.issuedAt).toLocaleDateString("es-AR")}</p>
@@ -725,7 +785,7 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
   const [message, setMessage] = useState<Notice>(null);
   const [editing, setEditing] = useState<EditableRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const title: Record<EditableResource, string> = { airports: "Aeropuertos", capacities: "Capacidades", fares: "Tarifas", disruptions: "Contingencias", users: "Usuarios y roles", notifications: "Notificaciones" };
+  const title: Record<EditableResource, string> = { airports: "Aeropuertos", capacities: "Capacidades", fares: "Tarifas", users: "Usuarios y roles", notifications: "Notificaciones" };
   async function send(method: "POST" | "PATCH" | "DELETE", payload: Record<string, unknown>) {
     setMessage(null);
     const result = await mutate(resource, method, payload);
@@ -737,7 +797,7 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
     const payload = Object.fromEntries(new FormData(event.currentTarget));
     if (editing) {
       if (resource === "airports") payload.code = String(editing.code);
-      if (resource === "capacities" || resource === "fares" || resource === "disruptions") payload.flightId = String(editing.flightId);
+      if (resource === "capacities" || resource === "fares") payload.flightId = String(editing.flightId);
       if (resource === "users") payload.userId = String(editing.id);
     }
     void send(creating ? "POST" : "PATCH", payload);
@@ -746,7 +806,6 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
     if (resource === "airports") return <>{creating && <label>Código IATA<input name="code" pattern="[A-Za-z]{3}" required /></label>}<label>Ciudad<input name="city" defaultValue={String(editing?.city ?? "")} required /></label><label>Nombre<input name="name" defaultValue={String(editing?.name ?? "")} required /></label></>;
     if (resource === "capacities") return <div className="form-row"><label>Capacidad Economy<input name="economy" type="number" min="0" step="1" defaultValue={Number(editing?.capacityEconomy ?? 0)} required /></label><label>Capacidad Primera<input name="first" type="number" min="0" step="1" defaultValue={Number(editing?.capacityFirst ?? 0)} required /></label></div>;
     if (resource === "fares") return <div className="form-row"><label>Tarifa Economy<input name="economy" type="text" inputMode="decimal" placeholder="0" defaultValue={Number(editing?.economy ?? 0)} required /></label><label>Tarifa Primera<input name="first" type="text" inputMode="decimal" placeholder="0" defaultValue={Number(editing?.first ?? 0)} required /></label></div>;
-    if (resource === "disruptions") return <><label>Estado<select name="status" defaultValue={String(editing?.status ?? "Activo")}><option>Activo</option><option>Retrasado</option><option>Cancelado</option></select></label><p className="form-hint">Al cancelar el vuelo se cancelan sus reservas y se generan avisos para los pasajeros.</p></>;
     if (resource === "users") return <label>Rol<select name="role" defaultValue={String(editing?.role ?? "pasajero")}><option value="pasajero">Pasajero</option><option value="mostrador">Mostrador</option><option value="admin">Administrador</option></select></label>;
     return null;
   }
@@ -768,7 +827,7 @@ function Reservations({ live }: { live: boolean }) {
     setMessage({ ok: result.ok, text: result.ok ? (roundTrip ? "Viaje de ida y vuelta cancelado y cupos liberados." : "Reserva cancelada y cupos liberados.") : result.error });
     if (result.ok) refresh();
   }
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS VIAJES</p><h2>Reservas</h2></div><span className="subtle-count">{data?.length ?? "—"} reservas</span></div>{error && <p className="error-text" role="alert">{error}</p>}{!data && !error && <p role="status">Cargando reservas…</p>}{data?.length === 0 && <p className="empty-inline">Todavía no tenés reservas.</p>}<div className="record-grid">{data?.map((row) => <article className="record-card" key={row.code}><strong>{row.code}</strong><p>{row.flightId} · {row.passenger}</p><p>{row.seats} pasaje(s) · {row.cabin} · {money(row.amount)}</p>{row.returnReservationCode && <p>Ida y vuelta · Reserva vinculada {row.returnReservationCode}</p>}<p><Status value={row.status} /></p><div className="action-row">{row.status === "Pendiente de pago" && <Link className="button small" href={`/pasajero/pago?${new URLSearchParams({ reservation: row.code, ...(row.returnReservationCode ? { returnReservation: row.returnReservationCode } : {}) })}`}>Pagar prueba</Link>}{live && row.status !== "Cancelada" && !row.passengers?.some((person) => person.checked_in_at) && <button className="button small" type="button" onClick={() => cancel(row.code, Boolean(row.returnReservationCode))}>{row.returnReservationCode ? "Cancelar viaje completo" : "Cancelar"}</button>}{row.passengers?.some((person) => person.checked_in_at) && <span className="muted">Check-in realizado</span>}</div></article>)}</div><ActionNotice notice={message} /></section>;
+  return <section className="panel"><div className="panel-title"><div><p className="kicker">MIS VIAJES</p><h2>Reservas</h2></div><span className="subtle-count">{data?.length ?? "—"} reservas</span></div>{error && <p className="error-text" role="alert">{error}</p>}{!data && !error && <p role="status">Cargando reservas…</p>}{data?.length === 0 && <p className="empty-inline">Todavía no tenés reservas.</p>}<div className="record-grid">{data?.map((row) => <article className="record-card" key={row.code}><strong>{row.code}</strong><p>{row.flightId} · {row.passenger}</p><p>{row.seats} pasaje(s) · {row.cabin} · {money(row.amount)}</p>{row.returnReservationCode && <p>Ida y vuelta · Reserva vinculada {row.returnReservationCode}</p>}<p><Status value={row.status} /></p><div className="action-row">{row.status === "Pendiente de pago" && <Link className="button small" href={`/pasajero/pago?${new URLSearchParams({ reservation: row.code, ...(row.returnReservationCode ? { returnReservation: row.returnReservationCode } : {}) })}`}>Pagar prueba</Link>}{live && ["Confirmada", "Pendiente de pago"].includes(row.status) && !row.passengers?.some((person) => person.checked_in_at) && <button className="button small" type="button" onClick={() => cancel(row.code, Boolean(row.returnReservationCode))}>{row.returnReservationCode ? "Cancelar viaje completo" : "Cancelar"}</button>}{row.passengers?.some((person) => person.checked_in_at) && <span className="muted">Check-in realizado</span>}</div></article>)}</div><ActionNotice notice={message} /></section>;
 }
 
 function Profile({ live }: { live: boolean }) {
@@ -829,7 +888,7 @@ function Profile({ live }: { live: boolean }) {
 function GenericCollection({ resource, live }: { resource: string; live: boolean }) {
   const { data, error } = useMock<unknown>(resource);
   const records = data === null ? [] : Array.isArray(data) ? data : [data];
-  const labels: Record<string, string> = { code: "Código", flightId: "Vuelo", name: "Nombre", email: "Correo", phone: "Teléfono", role: "Rol", status: "Estado", economy: "Economy", first: "Primera", passenger: "Pasajero", document: "Documento", cabin: "Clase", seats: "Pasajes", checkedIn: "Check-in", reservationCode: "Reserva", seat: "Asiento", baggageKg: "Equipaje (kg)", gate: "Puerta", title: "Aviso", kind: "Tipo", affectedBookings: "Reservas afectadas", occupancy: "Ocupación", amount: "Monto", offline: "Disponible offline" };
+  const labels: Record<string, string> = { code: "Código", flightId: "Vuelo", name: "Nombre", email: "Correo", phone: "Teléfono", role: "Rol", status: "Estado", economy: "Economy", first: "Primera", passenger: "Pasajero", document: "Documento", cabin: "Clase", seats: "Pasajes", checkedIn: "Check-in", reservationCode: "Reserva", seat: "Asiento", baggageKg: "Equipaje (kg)", gate: "Puerta", title: "Aviso", kind: "Tipo", changedAt: "Fecha y hora", actor: "Usuario", field: "Campo", oldValue: "Valor anterior", newValue: "Valor nuevo", affectedBookings: "Reservas afectadas", occupancy: "Ocupación", amount: "Monto", offline: "Disponible offline" };
   return <section className="panel"><div className="panel-title"><div><p className="kicker">{live ? "DATOS DE SUPABASE" : "DATOS DE DEMOSTRACIÓN"}</p><h2>Vista general</h2></div><span className="subtle-count">API /api/data/{resource}</span></div>{error ? <p role="alert" className="error-text">{error}</p> : data === null ? <p role="status">Cargando datos…</p> : records.length === 0 ? <div className="empty-inline">Todavía no hay elementos para mostrar.</div> : <div className="record-grid">{records.map((record, index) => <div className="record-card" key={index}>{Object.entries(record as Record<string, unknown>).slice(0, 8).map(([key, value]) => <div key={key}><span>{labels[key] ?? key.replace(/([A-Z])/g, " $1")}</span><strong>{value === null || value === undefined || value === "" ? "—" : typeof value === "boolean" ? value ? "Sí" : "No" : key === "occupancy" ? `${value}%` : String(value)}</strong></div>)}</div>)}</div>}{!live && <p className="form-hint">Contenido ficticio para definir componentes, estados y contratos de API.</p>}</section>;
 }
 
@@ -866,17 +925,17 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
 
   if (module.role === "admin" && module.slug === "vuelos") return <AdminFlights live={live} />;
   if (module.slug === "compra") return <PassengerBooking key={JSON.stringify([initialFlight, initialQuery])} initialFlight={initialFlight} initialQuery={initialQuery} live={live} />;
-  if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} returnReservation={initialQuery.returnReservation} live={live} />;
+  if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} returnReservation={initialQuery.returnReservation} />;
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
   if (module.slug === "manifiesto") return <Manifest />;
   if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "facturas") return <Comprobantes canEmail={sprint >= resourceSprint.receipts} />;
-  if (module.slug === "disruptions") return <Disruptions />;
+  if (module.resource === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
   if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
-  if (["airports", "capacities", "fares", "disruptions", "users", "notifications"].includes(module.resource)) return <ResourceManager resource={module.resource as EditableResource} live={live} />;
+  if (["airports", "capacities", "fares", "users", "notifications"].includes(module.resource)) return <ResourceManager resource={module.resource as EditableResource} live={live} />;
   return <GenericCollection resource={module.resource} live={live} />;
 }
