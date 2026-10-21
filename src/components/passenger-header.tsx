@@ -10,10 +10,13 @@ export function PassengerHeader({ signedIn, sprint, live }: { signedIn: boolean;
   const reservationsEnabled = sprint >= findModule("pasajero", "mis-reservas")!.sprint;
   // En modo demo no hay sesión: el acceso a reservas sigue visible para recorrer el prototipo.
   const canSeeReservations = reservationsEnabled && (signedIn || !live);
+  const canSeeNotifications = canSeeReservations && sprint >= findModule("pasajero", "notificaciones")!.sprint;
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const links = [{ href: "/pasajero/buscar-vuelos", label: "Buscar vuelos", active: pathname === "/" || pathname === "/pasajero/buscar-vuelos" },
-    ...(canSeeReservations ? [{ href: "/pasajero/mis-reservas", label: "Mis reservas", active: pathname === "/pasajero/mis-reservas" }] : [])];
+    ...(canSeeReservations ? [{ href: "/pasajero/mis-reservas", label: "Mis reservas", active: pathname === "/pasajero/mis-reservas" },
+      { href: "/pasajero/facturas", label: "E-tickets y facturas", active: pathname === "/pasajero/facturas" }] : []),
+    ...(canSeeNotifications ? [{ href: "/pasajero/notificaciones", label: "Notificaciones", active: pathname === "/pasajero/notificaciones" }] : [])];
   return <><header className="passenger-header">
     <Link href="/" className="brand"><span className="brand-mark">✈</span><span><strong>SIGV</strong><small>AEROLÍNEA NACIONAL</small></span></Link>
     <nav className="passenger-navigation" aria-label="Navegación de pasajeros">
@@ -25,7 +28,7 @@ export function PassengerHeader({ signedIn, sprint, live }: { signedIn: boolean;
     <button className="passenger-menu-toggle" type="button" aria-label={menuOpen ? "Cerrar menú" : "Abrir menú"} aria-expanded={menuOpen} aria-controls="passenger-mobile-menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
   </header>
     {menuOpen && <nav id="passenger-mobile-menu" className="passenger-mobile-menu" aria-label="Menú del pasajero" onClick={() => setMenuOpen(false)}>
-      <Link href="/pasajero/buscar-vuelos">Buscar vuelos</Link>{canSeeReservations && <><Link href="/pasajero/mis-reservas">Mis reservas</Link><Link href="/pasajero/facturas">Facturas</Link></>}{sprint >= findModule("pasajero", "tickets")!.sprint && <Link href="/pasajero/tickets">Tickets digitales</Link>}{sprint >= findModule("pasajero", "notificaciones")!.sprint && <Link href="/pasajero/notificaciones">Notificaciones</Link>}
+      <Link href="/pasajero/buscar-vuelos">Buscar vuelos</Link>{canSeeReservations && <><Link href="/pasajero/mis-reservas">Mis reservas</Link><Link href="/pasajero/facturas">E-tickets y facturas</Link></>}{sprint >= findModule("pasajero", "tickets")!.sprint && <Link href="/pasajero/tickets">Tickets digitales</Link>}{sprint >= findModule("pasajero", "notificaciones")!.sprint && <Link href="/pasajero/notificaciones">Notificaciones</Link>}
       {signedIn ? <><Link href="/pasajero/perfil">Mi perfil</Link><SignOutButton /></> : <><Link href="/ingresar">Iniciar sesión</Link><Link href="/registro">Registrarse</Link></>}
     </nav>}
     <nav className="passenger-bottom-nav" aria-label="Navegación móvil">
