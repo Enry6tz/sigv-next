@@ -14,3 +14,6 @@ if (dataProvider !== "mock" && dataProvider !== "supabase") {
 export function available(minSprint: number) {
   return appSprint >= minSprint;
 }
+
+// Zona horaria para mostrar fechas generadas en el servidor (comprobantes, auditoría).
+export const appTimeZone = process.env.APP_TIME_ZONE || "America/Argentina/Buenos_Aires";

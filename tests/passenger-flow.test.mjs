@@ -63,17 +63,17 @@ test("rechaza regreso inválido, grupo sin cupos, cabina inválida y documentos 
 test("exige contacto válido y formato numérico de documento en la reserva", integration, async () => {
   const health = await (await fetch(`${base}/api/health`)).json();
   assert.equal(health.provider, "mock", "No ejecutar mutaciones en un proveedor real");
-  const base = { flightId: "AR-1420", cabin: "Economy", passengerCount: 1, passengers: [people[0]] };
-  const sinContacto = await post("reservations", base);
+  const booking = { flightId: "AR-1420", cabin: "Economy", passengerCount: 1, passengers: [people[0]] };
+  const sinContacto = await post("reservations", booking);
   assert.equal(sinContacto.status, 400);
-  assert.match(sinContacto.body.error, /correo electrónico válido/);
-  const contactoMal = await post("reservations", { ...base, ...contact, contactEmail: "sin-arroba" });
+  assert.match(sinContacto.body.error, /Ingresá el correo electrónico/);
+  const contactoMal = await post("reservations", { ...booking, ...contact, contactEmail: "sin-arroba" });
   assert.equal(contactoMal.status, 400);
   assert.match(contactoMal.body.error, /correo electrónico válido/);
-  const documentoMalo = await post("reservations", { ...base, ...contact, passengers: [{ ...people[0], document: "ABC-123" }] });
+  const documentoMalo = await post("reservations", { ...booking, ...contact, passengers: [{ ...people[0], document: "ABC-123" }] });
   assert.equal(documentoMalo.status, 400);
-  assert.match(documentoMalo.body.error, /entre 6 y 8 dígitos/);
-  const ok = await post("reservations", { ...base, ...contact });
+  assert.match(documentoMalo.body.error, /formato de documento inválido, debe ser 6 a 8 dígitos/);
+  const ok = await post("reservations", { ...booking, ...contact });
   assert.equal(ok.status, 202);
   assert.ok(ok.body.data.code);
 });
