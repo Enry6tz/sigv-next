@@ -6,6 +6,8 @@ import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
 import { adminFlightDto } from "@/lib/admin-flights";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
+import { mailConfigured } from "@/lib/mail";
+import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
@@ -382,10 +384,24 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   }
   if (resource === "payments" && method === "POST") {
     await requireUser(client);
-    if (text(payload.returnReservationCode)) return unwrap(await client.rpc("sigv_demo_round_trip_payment", {
-      p_code: text(payload.reservationCode), p_return_code: text(payload.returnReservationCode), p_method: text(payload.method),
-    }));
-    return unwrap(await client.rpc("sigv_demo_payment", { p_code: text(payload.reservationCode), p_method: text(payload.method) }));
+    const code = text(payload.reservationCode);
+    const returnCode = text(payload.returnReservationCode);
+    const result = returnCode
+      ? unwrap(await client.rpc("sigv_demo_round_trip_payment", { p_code: code, p_return_code: returnCode, p_method: text(payload.method) }))
+      : unwrap(await client.rpc("sigv_demo_payment", { p_code: code, p_method: text(payload.method) }));
+    return { ...(result as Json), receiptEmail: await scheduleReceiptEmail(client, returnCode ? [code, returnCode] : [code]) };
+  }
+  if (resource === "receipts" && method === "POST") {
+    const userId = await requireUser(client);
+    const legs = await loadReceipts(client, [text(payload.reservationCode)]);
+    if (!legs[0] || legs[0].ownerId !== userId || legs[0].status !== "Confirmada" || !legs[0].invoice) throw new ApiError("Reserva confirmada no encontrada", 404);
+    if (!mailConfigured()) throw new ApiError("El envío de correos no está configurado en este entorno.", 503);
+    try {
+      return { reservationCode: legs[0].reservationCode, sentTo: await sendReceiptEmail(legs) };
+    } catch (error) {
+      console.error("Receipt email failed", error);
+      throw new ApiError("No se pudo enviar el correo. Intentá nuevamente en unos minutos.", 502);
+    }
   }
   if (resource === "check-in" && method === "POST") {
     await requireRole(client, ["admin", "mostrador"]);

@@ -53,7 +53,7 @@ export const resourceSprint: Record<string, 1 | 2 | 3> = {
   dashboard: 1, flights: 1, "admin-flights": 1, airports: 1, capacities: 1, fares: 1,
   aircraft: 1, schedules: 1, frequencies: 1, configurations: 1,
   users: 1, profile: 1, auth: 1, reservations: 1, payments: 1,
-  invoices: 1, seats: 2,
+  invoices: 1, seats: 2, receipts: 2,
   disruptions: 2, manifest: 2, "check-in": 2, "boarding-passes": 2,
   notifications: 3, tickets: 3, reports: 3, "flight-logs": 3,
 };

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
-import { findModule, type Module } from "@/lib/catalog";
+import { findModule, resourceSprint, type Module } from "@/lib/catalog";
 import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
@@ -60,6 +60,7 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
   const [busy, setBusy] = useState(false);
   const [paid, setPaid] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [receiptEmail, setReceiptEmail] = useState<string | null>(null);
   const [cardNumber, setCardNumber] = useState("");
   const [cardHolder, setCardHolder] = useState("");
   const [cardExpiry, setCardExpiry] = useState("");
@@ -118,6 +119,7 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
     if (result.ok) {
       setPaid(true);
       setConfirmed(true);
+      setReceiptEmail(typeof result.data?.receiptEmail === "string" ? result.data.receiptEmail : null);
       const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
       router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
     } else {
@@ -145,6 +147,8 @@ function Payment({ reservationCode, returnReservation, live }: { reservationCode
         <aside className="panel summary-panel">
           <h2>Resumen del pago</h2>
           <p>El pago se procesó correctamente y tu reserva está confirmada.</p>
+          {receiptEmail && <p>Te enviamos el e-ticket de cada pasajero y la factura a <strong>{receiptEmail}</strong>.</p>}
+          <Link className="button small" href="/pasajero/facturas">Ver comprobantes</Link>
           <p className="form-hint">No se procesó dinero real. Esta es una simulación de prueba.</p>
         </aside>
       </div>
@@ -636,16 +640,19 @@ function Disruptions() {
 }
 
 type InvoiceRow = { id: string; number: string; amount: number; issuedAt: string; reservationCode: string };
-type ReservationRow = { code: string; flightId: string; cabin: string; passenger: string; passengers: { seat: string | null }[] };
-type FlightRow = { id: string; origin: string; destination: string; flight_date: string; departure: string; arrival: string };
-type TicketData = { reservationCode: string; passenger: string; flightId: string; origin: string; destination: string; flightDate: string; departure: string; arrival: string; cabin: string; seat: string | null };
+type ReceiptReservation = { code: string; flightId: string; cabin: string; status: string; passengers: { id: string; first_name: string; last_name: string }[] };
+type ReceiptFlight = { id: string; code: string; origin: string; destination: string; date: string; departure: string };
 
-function Comprobantes() {
+const receiptUrl = (reservationCode: string, query: Record<string, string>) => `/api/receipts/${encodeURIComponent(reservationCode)}?${new URLSearchParams(query)}`;
+
+function Comprobantes({ canEmail }: { canEmail: boolean }) {
   const [invoices, setInvoices] = useState<InvoiceRow[] | null>(null);
-  const [reservations, setReservations] = useState<ReservationRow[] | null>(null);
-  const [flights, setFlights] = useState<FlightRow[] | null>(null);
+  const [reservations, setReservations] = useState<ReceiptReservation[] | null>(null);
+  const [flights, setFlights] = useState<ReceiptFlight[] | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [sending, setSending] = useState<string | null>(null);
+  const [message, setMessage] = useState<Notice>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -658,69 +665,26 @@ function Comprobantes() {
         if (!invRes.ok || !resRes.ok || !fltRes.ok) throw new Error("No se pudieron cargar los comprobantes.");
         const [invBody, resBody, fltBody] = await Promise.all([invRes.json(), resRes.json(), fltRes.json()]);
         setInvoices((invBody.data ?? []) as InvoiceRow[]);
-        setReservations((resBody.data ?? []) as ReservationRow[]);
-        setFlights((fltBody.data ?? []) as FlightRow[]);
+        setReservations((resBody.data ?? []) as ReceiptReservation[]);
+        setFlights((fltBody.data ?? []) as ReceiptFlight[]);
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
   }, [revision]);
 
-  function downloadHtml(filename: string, html: string) {
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function eticketHtml(t: TicketData) {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>E-ticket ${t.reservationCode}</title>
-    <style>body{font-family:Consolas,monospace;color:#222;padding:24px}.bar{border:2px solid #222;padding:20px}.h{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.t{font-size:10px;color:#777;text-transform:uppercase}.v{font-size:16px;font-weight:700}.row{display:flex;justify-content:space-between;margin:8px 0}.qr{margin-top:24px;display:flex;flex-direction:column;align-items:center}.q{display:flex;gap:2px}</style></head>
-    <body><div class="bar"><div class="h"><div><p class="t">SIGV · Aerolínea Nacional</p><p class="v">E-TICKET</p></div><div style="text-align:right"><p class="v">${t.reservationCode}</p></div></div>
-    <div class="row"><span class="t">Pasajero</span><span class="v">${t.passenger}</span></div>
-    <div class="row"><span class="t">Vuelo</span><span class="v">${t.origin} → ${t.destination}</span></div>
-    <div class="row"><span class="t">Fecha / Hora</span><span class="v">${new Date(t.flightDate).toLocaleDateString("es-AR")} · ${t.departure} → ${t.arrival}</span></div>
-    <div class="row"><span class="t">Clase / Asiento</span><span class="v">${t.cabin} · ${t.seat ?? "Asignado en mostrador"}</span></div>
-    <div class="row"><span class="t">Código de Reserva</span><span class="v">${t.reservationCode}</span></div>
-    <div class="qr"><p class="t">Código de Embarque</p><div class="q">${qrCells(t.reservationCode).map((row) => `<div style="display:flex;gap:2px">${row.map((c) => `<div style="width:10px;height:10px;background:${c?"#222":"#eee"}"></div>`).join("")}</div>`).join("")}</div></div>
-    <p style="margin-top:24px;font-size:11px;color:#777">Presenta este e-ticket junto con tu documento de identidad al abordar.</p></div></body></html>`;
-  }
-
-  function facturaHtml(t: TicketData, invoice: InvoiceRow) {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Factura ${invoice.number}</title>
-    <style>body{font-family:Consolas,monospace;color:#222;padding:24px}.bar{border:2px solid #222;padding:20px}.h{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.t{font-size:10px;color:#777;text-transform:uppercase}.v{font-size:16px;font-weight:700}.row{display:flex;justify-content:space-between;margin:8px 0}.total{margin-top:16px;padding-top:16px;border-top:1px solid #222;font-size:14px;font-weight:700}</style></head>
-    <body><div class="bar"><div class="h"><div><p class="t">SIGV · Aerolínea Nacional</p><p class="v">FACTURA</p></div><div style="text-align:right"><p class="v">${invoice.number}</p></div></div>
-    <div class="row"><span class="t">Pasajero</span><span class="v">${t.passenger}</span></div>
-    <div class="row"><span class="t">Reserva</span><span class="v">${t.reservationCode}</span></div>
-    <div class="row"><span class="t">Vuelo</span><span class="v">${t.origin} → ${t.destination}</span></div>
-    <div class="row"><span class="t">Fecha</span><span class="v">${new Date(invoice.issuedAt).toLocaleDateString("es-AR")}</span></div>
-    <div class="row"><span class="t">Clase</span><span class="v">${t.cabin}</span></div>
-    <div class="total"><span>Total</span><span class="v">$${invoice.amount.toLocaleString("es-AR")}</span></div>
-    <p style="margin-top:24px;font-size:11px;color:#777">Comprobante fiscal de la compra. Este documento es generado automáticamente tras el pago exitoso.</p></div></body></html>`;
-  }
-
-  function qrCells(code: string, size: number = 15) {
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) hash = ((hash << 5) - hash + code.charCodeAt(i)) | 0;
-    const cells: boolean[][] = [];
-    for (let r = 0; r < size; r++) {
-      const row: boolean[] = [];
-      for (let c = 0; c < size; c++) {
-        hash = ((hash << 13) ^ (hash >> 17)) | 0;
-        row.push(((hash >> (c % 5)) & 1) === 1);
-      }
-      cells.push(row);
-    }
-    return cells;
+  async function email(reservationCode: string) {
+    setSending(reservationCode);
+    setMessage(null);
+    const result = await mutate("receipts", "POST", { reservationCode });
+    setSending(null);
+    setMessage({ ok: result.ok, text: result.ok ? `Enviamos los e-tickets y la factura de ${reservationCode} a ${(result.data.sentTo as string[]).join(", ")}.` : result.error });
   }
 
   if (error) return <section className="panel"><p role="alert" className="error-text">{error}</p></section>;
   if (!invoices || !reservations || !flights) return <section className="panel"><p role="status">Cargando comprobantes…</p></section>;
 
-  const byReservation = new Map(reservations.map((r: ReservationRow) => [r.code, r]));
-  const byFlight = new Map(flights.map((f: FlightRow) => [f.id, f]));
+  const byReservation = new Map(reservations.map((r) => [r.code, r]));
+  const byFlight = new Map(flights.map((f) => [f.id, f]));
 
   return (
     <section className="panel">
@@ -731,37 +695,27 @@ function Comprobantes() {
         <div className="record-grid">
           {invoices.map((inv) => {
             const res = byReservation.get(inv.reservationCode);
-            const flight = res ? byFlight.get(res.flightId) : null;
-            const ticket: TicketData = {
-              reservationCode: inv.reservationCode,
-              passenger: res?.passenger ?? "",
-              flightId: res?.flightId ?? "",
-              origin: flight?.origin ?? "",
-              destination: flight?.destination ?? "",
-              flightDate: flight?.flight_date ?? "",
-              departure: flight?.departure ?? "",
-              arrival: flight?.arrival ?? "",
-              cabin: res?.cabin ?? "",
-              seat: res?.passengers?.[0]?.seat ?? null,
-            };
+            const flight = res ? byFlight.get(res.flightId) : undefined;
+            const confirmed = res?.status === "Confirmada";
             return (
               <article className="record-card" key={inv.number}>
                 <strong>Factura {inv.number}</strong>
-                <p>Reserva: {inv.reservationCode}</p>
-                <p>Pasajero: {ticket.passenger}</p>
-                <p>Vuelo: {ticket.origin} → {ticket.destination}</p>
-                <p>Monto: $${inv.amount.toLocaleString("es-AR")}</p>
+                <p>Reserva: {inv.reservationCode}{res && res.status !== "Confirmada" ? ` · ${res.status}` : ""}</p>
+                <p>Vuelo: {flight ? `${flight.code} · ${flight.origin} → ${flight.destination} · ${flight.date.split("-").reverse().join("/")} ${flight.departure}` : res?.flightId ?? "—"}</p>
+                <p>Clase: {res?.cabin ?? "—"}</p>
+                <p>Monto: {money(inv.amount)}</p>
                 <p>Emitida: {new Date(inv.issuedAt).toLocaleDateString("es-AR")}</p>
                 <div className="action-row">
-                  <button className="button small" type="button" onClick={() => downloadHtml(`eticket-${ticket.reservationCode}.html`, eticketHtml(ticket))}>Descargar E-ticket</button>
-                  <button className="button small" type="button" onClick={() => downloadHtml(`factura-${inv.number}.html`, facturaHtml(ticket, inv))}>Descargar Factura</button>
-                  <button className="button" type="button" disabled>Enviar por Email</button>
+                  <a className="button small" href={receiptUrl(inv.reservationCode, { doc: "factura" })}>Descargar Factura</a>
+                  {confirmed && res.passengers.map((person) => <a className="button small" key={person.id} href={receiptUrl(inv.reservationCode, { doc: "eticket", passenger: person.id })}>E-ticket · {person.first_name} {person.last_name}</a>)}
+                  {canEmail && confirmed && <button className="button" type="button" disabled={sending !== null} onClick={() => void email(inv.reservationCode)}>{sending === inv.reservationCode ? "Enviando…" : "Enviar por Email"}</button>}
                 </div>
               </article>
             );
           })}
         </div>
       )}
+      <ActionNotice notice={message} />
     </section>
   );
 }
@@ -918,7 +872,7 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "check-in") return <CheckIn live={live} />;
   if (module.slug === "manifiesto") return <Manifest />;
   if (module.slug === "boarding-pass") return <BoardingPass />;
-  if (module.slug === "facturas") return <Comprobantes />;
+  if (module.slug === "facturas") return <Comprobantes canEmail={sprint >= resourceSprint.receipts} />;
   if (module.slug === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
