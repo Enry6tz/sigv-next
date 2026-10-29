@@ -11,6 +11,7 @@ import { documentProblem, emailProblem, normalizeEmail, normalizePhone, phonePro
 import { simulatedPaymentResult, PAYMENT_DECLINED_MESSAGE } from "@/lib/payment-simulation";
 import { flightPolicyProblem, nextFlightStatus } from "@/lib/flight-policy";
 import { summarizeInventory } from "@/lib/inventory";
+import { changeReason } from "@/lib/flight-change-mail";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,7 @@ export async function GET(request: NextRequest, context: Context) {
     origin: flight.origin, destination: flight.destination, date: flight.date, departure: flight.departure, arrival: flight.arrival,
     scheduledDeparture: flight.scheduledDeparture ?? flight.departure, kind: flight.status === "Retrasado" ? "Retraso" : "Sin contingencia",
     affectedBookings: flight.id === reservation.flightId ? 1 : 0, status: flight.status }));
+  if (resource === "flight-mail") return NextResponse.json({ mode: "mock", resource, data: { configured: false, items: [], attempts: [] } }, { headers: { "Cache-Control": "no-store" } });
   if (resource === "admin-flights") data = flights.map((flight) => adminFlightDto({
     id: flight.id, code: flight.id, origin: flight.origin, destination: flight.destination,
     aircraft_id: null, aircraft: null, departure: flight.departure, arrival: flight.arrival,
@@ -167,6 +169,10 @@ export async function PATCH(request: NextRequest, context: Context) {
     } catch (error) {
       return liveError(error);
     }
+  }
+  if (["flights", "disruptions"].includes(resource) && payload.reason !== undefined) {
+    try { changeReason(payload.reason); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Motivo inválido" }, { status: 400 }); }
   }
   if (["flights", "disruptions"].includes(resource)) {
     const flight = flights.find((row) => row.id === payload.flightId);

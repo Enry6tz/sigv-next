@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "./server";
 import { ApiError, databaseError } from "@/lib/api-errors";
@@ -6,7 +7,9 @@ import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
 import { adminFlightDto } from "@/lib/admin-flights";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
-import { mailConfigured } from "@/lib/mail";
+import { mailConfigured, sendMail } from "@/lib/mail";
+import { changeReason, flightChangeMail, type FlightChangeMailEvent } from "@/lib/flight-change-mail";
+import { processMailOutbox, supabaseOutboxStore } from "@/lib/mail-outbox";
 import { appTimeZone } from "@/lib/sprint";
 import { boardingPassCode } from "@/lib/boarding-pass";
 import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
@@ -15,6 +18,26 @@ export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
 type Json = Record<string, unknown>;
+
+export async function processFlightMail(client: Client) {
+  if (!mailConfigured()) return { claimed: 0, sent: 0, retry: 0, configured: false };
+  const result = await processMailOutbox(supabaseOutboxStore(client), (item) => sendMail(flightChangeMail(item.payload as FlightChangeMailEvent, {
+    email: process.env.FLIGHT_SUPPORT_EMAIL, phone: process.env.FLIGHT_SUPPORT_PHONE,
+  })));
+  return { ...result, configured: true };
+}
+
+function scheduleFlightMail(client: Client) {
+  after(async () => {
+    try { await processFlightMail(client); }
+    catch { console.error("No se pudo procesar la cola de contingencias; los pendientes se conservan para el próximo intento."); }
+  });
+}
+
+function reasonValue(value: unknown) {
+  try { return changeReason(value); }
+  catch (error) { throw new ApiError(error instanceof Error ? error.message : "Motivo inválido"); }
+}
 
 async function session(client: Client) {
   const { data } = await client.auth.getClaims();
@@ -101,6 +124,15 @@ async function reservations(client: Client) {
 
 export async function readResource(resource: string, filters: URLSearchParams) {
   const client = await createClient();
+  if (resource === "flight-mail") {
+    await requireRole(client, ["admin"]);
+    const items = unwrap(await client.from("flight_mail_outbox")
+      .select("id,reservation_code,flight_id,recipient,status,attempts,next_attempt_at,last_error,created_at,sent_at")
+      .order("created_at", { ascending: false }).limit(100));
+    const attempts = unwrap(await client.from("flight_mail_attempts")
+      .select("id,outbox_id,attempt,result,detail,created_at").order("created_at", { ascending: false }).limit(200));
+    return { configured: mailConfigured(), items, attempts };
+  }
   if (resource === "flights") return flights(client, filters);
   if (resource === "admin-flights") {
     await requireRole(client, ["admin"]);
@@ -269,6 +301,10 @@ function positiveNumber(value: unknown, label: string) {
 
 export async function writeResource(resource: string, method: "POST" | "PATCH" | "DELETE", payload: Json) {
   const client = await createClient();
+  if (resource === "flight-mail" && method === "POST") {
+    await requireRole(client, ["admin"]);
+    return processFlightMail(client);
+  }
   if (resource === "admin-flights" && ["PATCH", "DELETE"].includes(method)) {
     await requireRole(client, ["admin"]);
     if (!text(payload.id)) throw new ApiError("Falta la programación del vuelo");
@@ -498,9 +534,11 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
       if (payload[from] !== undefined) updates[to] = payload[from];
     }
     if (payload.restore === true) updates.archived_at = null;
+    if (payload.reason !== undefined || ["status", "date", "departure", "arrival"].some((field) => payload[field] !== undefined))
+      updates.reason = reasonValue(payload.reason);
     if (!Object.keys(updates).length) throw new ApiError("No hay cambios válidos");
-    if (payload.reason !== undefined) updates.reason = String(payload.reason);
     const row = unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates }));
+    scheduleFlightMail(client);
     return flightDto(row as unknown as Json);
   }
   if (["capacities", "fares"].includes(resource) && method === "PATCH") {
@@ -520,7 +558,7 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     await requireRole(client, ["admin"]);
     const status = text(payload.status);
     if (!["Activo", "Retrasado", "Cancelado", "Reprogramado", "Operado"].includes(status)) throw new ApiError("Estado inválido");
-    const updates: Json = { status };
+    const updates: Json = { status, reason: reasonValue(payload.reason) };
     if (payload.date !== undefined) updates.flight_date = text(payload.date);
     if (payload.departure !== undefined) updates.departure = text(payload.departure);
     if (payload.arrival !== undefined) updates.arrival = text(payload.arrival);
@@ -528,9 +566,10 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
       || [updates.departure, updates.arrival].some((value) => value !== undefined && !/^\d{2}:\d{2}$/.test(String(value))))
       throw new ApiError("Ingresá la nueva fecha y los horarios de salida y llegada");
     if (updates.departure !== undefined && updates.departure === updates.arrival) throw new ApiError("Los horarios de salida y llegada deben ser diferentes");
-    if (payload.reason !== undefined) updates.reason = String(payload.reason);
     unwrap(await client.rpc("sigv_close_due_flights"));
-    return flightDto(unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates })));
+    const flight = flightDto(unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates })));
+    scheduleFlightMail(client);
+    return flight;
   }
   if (resource === "users" && method === "PATCH") {
     await requireRole(client, ["admin"]);
