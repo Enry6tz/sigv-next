@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "./server";
 import { ApiError, databaseError } from "@/lib/api-errors";
@@ -6,14 +7,38 @@ import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
 import { adminFlightDto } from "@/lib/admin-flights";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
-import { mailConfigured } from "@/lib/mail";
+import { mailConfigured, sendMail } from "@/lib/mail";
+import { changeReason, flightChangeMail, type FlightChangeMailEvent } from "@/lib/flight-change-mail";
+import { processMailOutbox, supabaseOutboxStore } from "@/lib/mail-outbox";
 import { appTimeZone } from "@/lib/sprint";
 import { boardingPassCode } from "@/lib/boarding-pass";
 import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
+import { flightStatus } from "@/lib/flight-policy";
+import { buildOccupancyReport, type ReportFlight } from "@/lib/occupancy-report";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
 type Json = Record<string, unknown>;
+
+export async function processFlightMail(client: Client) {
+  if (!mailConfigured()) return { claimed: 0, sent: 0, retry: 0, configured: false };
+  const result = await processMailOutbox(supabaseOutboxStore(client), (item) => sendMail(flightChangeMail(item.payload as FlightChangeMailEvent, {
+    email: process.env.FLIGHT_SUPPORT_EMAIL, phone: process.env.FLIGHT_SUPPORT_PHONE,
+  })));
+  return { ...result, configured: true };
+}
+
+function scheduleFlightMail(client: Client) {
+  after(async () => {
+    try { await processFlightMail(client); }
+    catch { console.error("No se pudo procesar la cola de contingencias; los pendientes se conservan para el próximo intento."); }
+  });
+}
+
+function reasonValue(value: unknown) {
+  try { return changeReason(value); }
+  catch (error) { throw new ApiError(error instanceof Error ? error.message : "Motivo inválido"); }
+}
 
 async function session(client: Client) {
   const { data } = await client.auth.getClaims();
@@ -48,11 +73,16 @@ const auditFields: Record<string, string> = {
 };
 
 function flightDto(row: Json) {
+  const operational = { date: String(row.flight_date), departure: String(row.departure), status: String(row.status),
+    scheduledDeparture: String(row.scheduled_departure ?? row.departure), takenOffAt: row.taken_off_at as string | null,
+    timeZone: String(row.service_timezone ?? appTimeZone) };
   return {
     id: row.id, origin: row.origin, destination: row.destination,
     code: displayFlightCode({ id: String(row.id), scheduleId: typeof row.schedule_id === "string" ? row.schedule_id : null }),
     date: row.flight_date, departure: String(row.departure).slice(0, 5),
-    arrival: String(row.arrival).slice(0, 5), status: row.status,
+    arrival: String(row.arrival).slice(0, 5), status: flightStatus(operational),
+    scheduledDeparture: operational.scheduledDeparture.slice(0, 5), takenOffAt: operational.takenOffAt,
+    timeZone: operational.timeZone,
     economy: Number(row.economy), first: Number(row.first),
     seatsEconomy: row.seats_economy, seatsFirst: row.seats_first,
     isDemo: row.is_demo, archivedAt: row.archived_at,
@@ -95,6 +125,15 @@ async function reservations(client: Client) {
 
 export async function readResource(resource: string, filters: URLSearchParams) {
   const client = await createClient();
+  if (resource === "flight-mail") {
+    await requireRole(client, ["admin"]);
+    const items = unwrap(await client.from("flight_mail_outbox")
+      .select("id,reservation_code,flight_id,recipient,status,attempts,next_attempt_at,last_error,created_at,sent_at")
+      .order("created_at", { ascending: false }).limit(100));
+    const attempts = unwrap(await client.from("flight_mail_attempts")
+      .select("id,outbox_id,attempt,result,detail,created_at").order("created_at", { ascending: false }).limit(200));
+    return { configured: mailConfigured(), items, attempts };
+  }
   if (resource === "flights") return flights(client, filters);
   if (resource === "admin-flights") {
     await requireRole(client, ["admin"]);
@@ -137,6 +176,10 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     await requireRole(client, ["admin"]);
     return unwrap(await client.from("flights").select("id,seats_economy,seats_first,capacity_economy,capacity_first"))
       .map((row: Json) => ({ flightId: row.id, economy: row.seats_economy, first: row.seats_first, capacityEconomy: row.capacity_economy, capacityFirst: row.capacity_first }));
+  }
+  if (resource === "inventory") {
+    await requireRole(client, ["admin", "mostrador"]);
+    return unwrap(await client.rpc("sigv_flight_inventory", { p_flight_id: filters.get("flightId") || null }));
   }
   if (resource === "fares") {
     await requireRole(client, ["admin"]);
@@ -225,11 +268,12 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   }
   if (resource === "disruptions") {
     await requireRole(client, ["admin"]);
+    unwrap(await client.rpc("sigv_close_due_flights"));
     const allFlights = await flights(client);
     const allReservations = await reservations(client);
     return allFlights.map((row) => ({
       flightId: row.id, code: row.code, origin: row.origin, destination: row.destination,
-      date: row.date, departure: row.departure, arrival: row.arrival,
+      date: row.date, departure: row.departure, arrival: row.arrival, scheduledDeparture: row.scheduledDeparture,
       kind: row.status === "Cancelado" ? "Cancelación" : row.status === "Retrasado" ? "Retraso" : "Sin contingencia",
       affectedBookings: allReservations.filter((booking) => booking.flightId === row.id && booking.status !== "Cancelada").length,
       status: row.status,
@@ -237,11 +281,21 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   }
   if (resource === "reports") {
     await requireRole(client, ["admin"]);
-    const rows = unwrap(await client.from("flights").select("id,seats_economy,seats_first,capacity_economy,capacity_first"));
-    return rows.flatMap((row: Json) => [
-      { flightId: row.id, cabin: "Economy", occupancy: Number(row.capacity_economy) ? Math.round((1 - Number(row.seats_economy) / Number(row.capacity_economy)) * 100) : 0 },
-      { flightId: row.id, cabin: "Primera", occupancy: Number(row.capacity_first) ? Math.round((1 - Number(row.seats_first) / Number(row.capacity_first)) * 100) : 0 },
-    ]);
+    const reportFlights: ReportFlight[] = [];
+    const reportReservations = [];
+    // Paginar evita totales silenciosamente truncados por el límite de la Data API.
+    for (let offset = 0; ; offset += 1000) {
+      const rows = unwrap(await client.from("flights").select("id,flight_date,capacity_economy,capacity_first").order("id").range(offset, offset + 999));
+      reportFlights.push(...rows.map((row: Json) => ({ id: String(row.id), date: String(row.flight_date), capacityEconomy: Number(row.capacity_economy), capacityFirst: Number(row.capacity_first) })));
+      if (rows.length < 1000) break;
+    }
+    for (let offset = 0; ; offset += 1000) {
+      const rows = unwrap(await client.from("reservations").select("code,flight_id,cabin,status,reservation_passengers(first_name,last_name,document)").eq("status", "Confirmada").order("id").range(offset, offset + 999));
+      reportReservations.push(...rows.map((row) => ({ code: String(row.code), flightId: String(row.flight_id), cabin: String(row.cabin), status: String(row.status), passengers: row.reservation_passengers })));
+      if (rows.length < 1000) break;
+    }
+    try { return buildOccupancyReport(reportFlights, reportReservations, filters); }
+    catch (error) { throw new ApiError(error instanceof Error ? error.message : "Filtros inválidos"); }
   }
   throw new ApiError("Recurso desconocido", 404);
 }
@@ -258,6 +312,10 @@ function positiveNumber(value: unknown, label: string) {
 
 export async function writeResource(resource: string, method: "POST" | "PATCH" | "DELETE", payload: Json) {
   const client = await createClient();
+  if (resource === "flight-mail" && method === "POST") {
+    await requireRole(client, ["admin"]);
+    return processFlightMail(client);
+  }
   if (resource === "admin-flights" && ["PATCH", "DELETE"].includes(method)) {
     await requireRole(client, ["admin"]);
     if (!text(payload.id)) throw new ApiError("Falta la programación del vuelo");
@@ -397,14 +455,18 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     await requireUser(client);
     return unwrap(await client.rpc("sigv_cancel_reservation", { p_code: text(payload.reservationCode) }));
   }
+  if (resource === "payments" && method === "PATCH" && payload.action === "refund") {
+    await requireRole(client, ["admin"]);
+    return unwrap(await client.rpc("sigv_refund_reservation", { p_code: text(payload.reservationCode) }));
+  }
   if (resource === "payments" && method === "POST") {
     await requireUser(client);
     const code = text(payload.reservationCode);
     const returnCode = text(payload.returnReservationCode);
-    const result = returnCode
-      ? unwrap(await client.rpc("sigv_demo_round_trip_payment", { p_code: code, p_return_code: returnCode, p_method: text(payload.method) }))
-      : unwrap(await client.rpc("sigv_demo_payment", { p_code: code, p_method: text(payload.method) }));
-    return { ...(result as Json), receiptEmail: await scheduleReceiptEmail(client, returnCode ? [code, returnCode] : [code]) };
+    const result = unwrap(await client.rpc("sigv_simulated_checkout", { p_code: code, p_method: text(payload.method),
+      p_card_number: typeof payload.cardNumber === "string" ? payload.cardNumber : null, p_return_code: returnCode || null })) as Json;
+    if (result.status === "RECHAZADO" || result.replayed === true) return result;
+    return { ...result, receiptEmail: await scheduleReceiptEmail(client, returnCode ? [code, returnCode] : [code]) };
   }
   if (resource === "receipts" && method === "POST") {
     const userId = await requireUser(client);
@@ -483,8 +545,11 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
       if (payload[from] !== undefined) updates[to] = payload[from];
     }
     if (payload.restore === true) updates.archived_at = null;
+    if (payload.reason !== undefined || ["status", "date", "departure", "arrival"].some((field) => payload[field] !== undefined))
+      updates.reason = reasonValue(payload.reason);
     if (!Object.keys(updates).length) throw new ApiError("No hay cambios válidos");
-    const row = unwrap(await client.from("flights").update(updates).eq("id", text(payload.flightId)).select("*").single());
+    const row = unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates }));
+    scheduleFlightMail(client);
     return flightDto(row as unknown as Json);
   }
   if (["capacities", "fares"].includes(resource) && method === "PATCH") {
@@ -503,8 +568,8 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   if (resource === "disruptions" && method === "PATCH") {
     await requireRole(client, ["admin"]);
     const status = text(payload.status);
-    if (!["Activo", "Retrasado", "Cancelado"].includes(status)) throw new ApiError("Estado inválido");
-    const updates: Json = { status };
+    if (!["Activo", "Retrasado", "Cancelado", "Reprogramado", "Operado"].includes(status)) throw new ApiError("Estado inválido");
+    const updates: Json = { status, reason: reasonValue(payload.reason) };
     if (payload.date !== undefined) updates.flight_date = text(payload.date);
     if (payload.departure !== undefined) updates.departure = text(payload.departure);
     if (payload.arrival !== undefined) updates.arrival = text(payload.arrival);
@@ -512,7 +577,10 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
       || [updates.departure, updates.arrival].some((value) => value !== undefined && !/^\d{2}:\d{2}$/.test(String(value))))
       throw new ApiError("Ingresá la nueva fecha y los horarios de salida y llegada");
     if (updates.departure !== undefined && updates.departure === updates.arrival) throw new ApiError("Los horarios de salida y llegada deben ser diferentes");
-    return flightDto(unwrap(await client.from("flights").update(updates).eq("id", text(payload.flightId)).select("*").single()));
+    unwrap(await client.rpc("sigv_close_due_flights"));
+    const flight = flightDto(unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates })));
+    scheduleFlightMail(client);
+    return flight;
   }
   if (resource === "users" && method === "PATCH") {
     await requireRole(client, ["admin"]);

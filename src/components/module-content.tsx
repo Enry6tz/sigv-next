@@ -7,11 +7,14 @@ import { findModule, resourceSprint, type Module } from "@/lib/catalog";
 import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
+import { OccupancyReport } from "./occupancy-report";
 import { ActionNotice, type Notice } from "./action-notice";
-import { mutate } from "@/lib/mutations";
+import { mutate, reconcilePayment } from "@/lib/mutations";
 import { boardingPassPayload, qrMatrix } from "@/lib/boarding-pass";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
+import { DECLINED_TEST_CARD } from "@/lib/payment-simulation";
+import { terminalFlightStates } from "@/lib/flight-policy";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 import {
   cardNumberProblem,
@@ -28,15 +31,6 @@ import {
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
 // Fechas de vuelo YYYY-MM-DD sin pasar por Date, que las corre un día según la zona horaria.
 const displayDate = (value?: string | null) => value ? value.split("-").reverse().join("/") : "—";
-
-function downloadFile(filename: string, contents: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([contents], { type: mime }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 function useMock<T>(resource: string) {
   const [data, setData] = useState<T | null>(null);
@@ -62,6 +56,7 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
   const [message, setMessage] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [paid, setPaid] = useState(false);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState<string | null>(null);
   const [cardNumber, setCardNumber] = useState("");
@@ -93,6 +88,18 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
     event.preventDefault();
     if (busy || paid) return;
 
+    if (outcomeUnknown) {
+      setBusy(true);
+      const state = await reconcilePayment([reservationCode, ...(returnReservation ? [returnReservation] : [])]);
+      setBusy(false);
+      if (state === "confirmed") { finishPayment(); return; }
+      if (state !== "pending") {
+        setMessage({ ok: false, text: "No pudimos verificar el estado del pago. Revisa tu conexión y consulta Mis reservas antes de volver a pagar." });
+        return;
+      }
+      setOutcomeUnknown(false);
+    }
+
     const problems = {
       cardNumber: cardNumberProblem(cardNumber),
       cardHolder: cardHolderProblem(cardHolder),
@@ -118,26 +125,31 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
     data.cardExpiry = cardExpiry;
     data.cardCvv = normalizeCardCvv(cardCvv);
 
-    const result = await mutate("payments", "POST", data);
+    const result = await mutate("payments", "POST", data, { timeoutMs: 15000 });
     setBusy(false);
 
     if (result.ok) {
-      setPaid(true);
-      setConfirmed(true);
       setReceiptEmail(typeof result.data?.receiptEmail === "string" ? result.data.receiptEmail : null);
-      const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
-      router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
+      finishPayment();
     } else {
-      setMessage({ ok: false, text: result.error });
+      setOutcomeUnknown(Boolean(result.uncertain));
+      setMessage({ ok: false, text: result.uncertain ? "Se interrumpió la conexión y el resultado del pago no está confirmado. Revisa tu conexión; antes de reintentar verificaremos la reserva." : result.error });
     }
+  }
+
+  function finishPayment() {
+    setPaid(true); setConfirmed(true); setOutcomeUnknown(false);
+    const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
+    router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
   }
 
   if (confirmed) {
     return (
-      <div className="two-column">
+      <div className="two-column payment-flow">
         <section className="panel">
           <p className="kicker">PASO 2 DE 2</p>
-          <h2>¡Reserva Confirmada!</h2>
+          <h2>Resumen de Reserva</h2>
+          <p role="status"><strong>¡Reserva Confirmada!</strong></p>
           <p>Tu pasaje fue emitido exitosamente.</p>
           <div className="record-grid">
             <div><strong>Número de Reserva</strong><span>{reservationCode}</span></div>
@@ -161,7 +173,7 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
   }
 
   return (
-    <div className="two-column">
+    <div className="two-column payment-flow">
       <section className="panel">
         <p className="kicker">PASO 2 DE 2</p>
         <h2>Datos de Pago</h2>
@@ -201,10 +213,15 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
           <label>CUOTAS
             <input name="installments" defaultValue="1 cuota sin interés" readOnly />
           </label>
-          <p className="form-hint"><span aria-hidden="true">🔒</span> Tu información de pago está cifrada con tecnología SSL de 256 bits. SIGV nunca almacena el número completo de tu tarjeta.</p>
-          <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : "Confirmar y Pagar"}</button>
+          <div className="payment-demo-guide" role="note" aria-label="Tarjetas de prueba">
+            <strong>Pago simulado: usá únicamente datos de prueba.</strong>
+            <p>Aprobación: <code>4111 1111 1111 1111</code>. Rechazo garantizado: <code>{groupCardNumber(DECLINED_TEST_CARD)}</code>.</p>
+            <p>Completá un titular de prueba, vencimiento futuro y CVV de 3 dígitos. Un rechazo no confirma la reserva ni genera comprobantes.</p>
+          </div>
+          <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : outcomeUnknown ? "Verificar estado y reintentar" : "Confirmar y Pagar"}</button>
         </form>
         {message && <ActionNotice notice={message} />}
+        {outcomeUnknown && <Link className="inline-action" href="/pasajero/mis-reservas">Consultar Mis reservas</Link>}
       </section>
       <aside className="panel summary-panel">
         <h2>Resumen de compra</h2>
@@ -565,8 +582,8 @@ function BoardingPass() {
 
 type EditableResource = "airports" | "capacities" | "fares" | "users" | "notifications";
 
-type DisruptionRow = { flightId: string; code?: string; origin?: string; destination?: string; date?: string; departure?: string; arrival?: string; kind: string; affectedBookings: number; status: string };
-type FlightChange = { row: DisruptionRow; status: string; date?: string; departure?: string; arrival?: string };
+type DisruptionRow = { flightId: string; code?: string; origin?: string; destination?: string; date?: string; departure?: string; arrival?: string; scheduledDeparture?: string; kind: string; affectedBookings: number; status: string };
+type FlightChange = { row: DisruptionRow; status: string; date?: string; departure?: string; arrival?: string; reason?: string };
 
 const disruptionLimit = 60;
 
@@ -584,6 +601,64 @@ function changeEffect({ row, status, date }: FlightChange) {
   if (date) return `Afecta a ${bookings}. Conservan sus asientos en el nuevo horario; cada pasajero recibe un aviso y puede cancelar desde Mis reservas si no acepta el cambio, liberando sus asientos.`;
   if (status === "Retrasado") return `Se avisará la demora a los pasajeros de ${bookings}.`;
   return `Se avisará a los pasajeros de ${bookings} que el vuelo vuelve a operar normalmente.`;
+}
+
+type FlightMailHistoryData = {
+  configured: boolean;
+  items: { id: string; reservation_code: string; flight_id: string; recipient: string; status: string; attempts: number; next_attempt_at: string; last_error: string | null; sent_at: string | null }[];
+  attempts: { id: number; outbox_id: string; attempt: number; result: string; created_at: string; detail: string | null }[];
+};
+
+function FlightMailHistory({ revision }: { revision: number }) {
+  const [data, setData] = useState<FlightMailHistoryData | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/data/flight-mail", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "No se pudo consultar la cola de correos.");
+        setData(body.data);
+        setError("");
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
+    return () => controller.abort();
+  }, [revision, refresh]);
+
+  async function processPending() {
+    if (busy) return;
+    setBusy(true);
+    const result = await mutate("flight-mail", "POST", {});
+    setBusy(false);
+    setNotice(result.ok
+      ? { ok: true, text: `Procesamiento finalizado: ${Number(result.data?.sent ?? 0)} enviados y ${Number(result.data?.retry ?? 0)} pendientes de reintento.` }
+      : { ok: false, text: result.error });
+    setRefresh((value) => value + 1);
+  }
+
+  const statuses: Record<string, string> = { pending: "Pendiente", processing: "En proceso", retry: "Reintento pendiente", sent: "Enviado" };
+  const results: Record<string, string> = { claimed: "Tomado para envío", sent: "Entregado al servidor SMTP", retry: "Reintento programado", lease_expired: "Toma vencida recuperada" };
+  return <section className="mail-history" aria-labelledby="flight-mail-heading">
+    <div className="mail-history-heading"><div><h3 id="flight-mail-heading">Correos de contingencia</h3><p>Últimas 100 notificaciones y su historial de procesamiento.</p></div>
+      <div className="action-row"><button type="button" className="button small" disabled={busy} onClick={() => setRefresh((value) => value + 1)}>Actualizar</button>
+        <button type="button" className="button small" disabled={busy || !data?.configured} onClick={() => void processPending()}>{busy ? "Procesando…" : "Procesar pendientes"}</button></div></div>
+    <ActionNotice notice={notice} />
+    {error ? <p className="error-box" role="alert">{error}</p> : !data ? <p role="status">Cargando historial de correos…</p> : <>
+      {!data.configured && <p className="form-hint">SMTP no configurado o modo simulado: no se enviarán correos. En modo Supabase, los eventos permanecen guardados hasta configurar el servicio.</p>}
+      {data.items.length === 0 ? <p className="empty-inline">Todavía no hay correos de contingencia registrados.</p> : <div className="mail-history-list">{data.items.map((item) => <details key={item.id} className="mail-history-item">
+        <summary><strong>{item.flight_id} · {item.reservation_code}</strong><span>{statuses[item.status] ?? item.status} · {item.attempts} intentos</span></summary>
+        <p>Destinatario de la reserva: {item.recipient}</p>
+        {item.last_error && <p>{item.last_error}</p>}
+        {item.status === "retry" && <p>Próximo intento: <time dateTime={item.next_attempt_at}>{new Date(item.next_attempt_at).toLocaleString("es-AR")}</time></p>}
+        {item.sent_at && <p>Enviado: <time dateTime={item.sent_at}>{new Date(item.sent_at).toLocaleString("es-AR")}</time></p>}
+        <ul>{data.attempts.filter((attempt) => attempt.outbox_id === item.id).map((attempt) => <li key={attempt.id}>Intento {attempt.attempt}: {results[attempt.result] ?? attempt.result} · <time dateTime={attempt.created_at}>{new Date(attempt.created_at).toLocaleString("es-AR")}</time></li>)}</ul>
+      </details>)}</div>}
+      <p className="form-hint">Los reintentos respetan su próximo horario. El contacto de cada reserva recibe el aviso para todos sus pasajeros; no se inventan direcciones de acompañantes.</p>
+    </>}
+  </section>;
 }
 
 function Disruptions() {
@@ -617,7 +692,7 @@ function Disruptions() {
     const result = await mutate("disruptions", "PATCH", { flightId: row.flightId, ...change });
     setBusy(false);
     if (result.ok) {
-      setMessage({ ok: true, text: `Vuelo ${row.code ?? row.flightId} actualizado. Los pasajeros afectados fueron notificados y el cambio quedó registrado en Auditoría.` });
+      setMessage({ ok: true, text: `Vuelo ${row.code ?? row.flightId} actualizado. En modo Supabase, los correos de las reservas confirmadas quedan encolados para envío; el cambio queda registrado en Auditoría. El modo simulado no guarda ni envía correos.` });
       setPending(null);
       setRevision((v) => v + 1);
     } else {
@@ -628,7 +703,8 @@ function Disruptions() {
   function reschedule(event: FormEvent<HTMLFormElement>, row: DisruptionRow) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    setPending({ row, status: row.status, date: String(form.get("date")), departure: String(form.get("departure")), arrival: String(form.get("arrival")) });
+    const departure = String(form.get("departure"));
+    setPending({ row, status: departure > (row.scheduledDeparture ?? row.departure ?? "") ? "Retrasado" : "Activo", date: String(form.get("date")), departure, arrival: String(form.get("arrival")) });
     setRescheduling(null);
   }
 
@@ -657,12 +733,18 @@ function Disruptions() {
               <article className="record-card" key={row.flightId}>
                 <strong>{row.code ?? row.flightId}{row.origin ? ` · ${row.origin} → ${row.destination}` : ""}</strong>
                 {row.date && <p>{displayDate(row.date)} · {row.departure} → {row.arrival}</p>}
+                {row.scheduledDeparture && <p className="form-hint">Salida programada: {row.scheduledDeparture} · Salida vigente: {row.departure}</p>}
                 <p><Status value={row.status} /></p>
                 <p>Reservas afectadas: {row.affectedBookings}</p>
                 {confirming ? (
                   <div className="inline-form">
                     <p><strong>{changeTitle(pending)}</strong></p>
                     <p className="form-hint">{changeEffect(pending)}</p>
+                    <label className="mail-reason" htmlFor="flight-change-reason">Motivo de la contingencia <span>(opcional)</span>
+                      <textarea id="flight-change-reason" value={pending.reason ?? ""} maxLength={2000} rows={3} disabled={busy}
+                        aria-describedby="flight-change-reason-help" onChange={(event) => setPending({ ...pending, reason: event.target.value })} />
+                    </label>
+                    <p className="form-hint" id="flight-change-reason-help">Se incluirá tal como lo escribas en el correo. Máximo 2000 caracteres.</p>
                     <div className="action-row">
                       <button className="button dark" type="button" disabled={busy} onClick={() => void confirm()}>{busy ? "Guardando…" : "Confirmar"}</button>
                       <button className="button" type="button" disabled={busy} onClick={() => setPending(null)}>Volver</button>
@@ -680,12 +762,11 @@ function Disruptions() {
                       <button className="button" type="button" onClick={() => setRescheduling(null)}>Cerrar</button>
                     </div>
                   </form>
-                ) : row.status === "Cancelado" ? (
-                  <p className="form-hint">Vuelo cancelado: sus reservas quedaron &apos;A reagendar&apos; o &apos;A reembolsar&apos;.</p>
+                ) : terminalFlightStates.includes(row.status as typeof terminalFlightStates[number]) ? (
+                  <p className="form-hint">Estado terminal: {row.status}. El vuelo no admite cambios operativos.</p>
                 ) : (
                   <div className="action-row">
-                    <button className="button small" type="button" onClick={() => { setPending(null); setRescheduling(row.flightId); }}>Reprogramar</button>
-                    <button className="button small" type="button" onClick={() => setPending({ row, status: row.status === "Retrasado" ? "Activo" : "Retrasado" })}>{row.status === "Retrasado" ? "Volver a activo" : "Marcar retrasado"}</button>
+                    <button className="button small" type="button" onClick={() => { setPending(null); setRescheduling(row.flightId); }}>Cambiar fecha u horario</button>
                     <button className="button small" type="button" onClick={() => setPending({ row, status: "Cancelado" })}>Cancelar vuelo</button>
                   </div>
                 )}
@@ -694,7 +775,8 @@ function Disruptions() {
           })}
         </div>
       )}
-      <p className="form-hint">Cada cambio se confirma antes de aplicarse, notifica a los pasajeros afectados y queda registrado en Auditoría con el usuario, la fecha y las reservas afectadas.</p>
+      <p className="form-hint">La nueva hora reemplaza a la vigente; las demoras no se acumulan. No se puede cambiar la fecha dentro de las próximas 48 horas. Los cambios de horario conservan asiento y check-in, y quedan registrados en Auditoría.</p>
+      <FlightMailHistory revision={revision} />
     </section>
   );
 }
@@ -778,6 +860,35 @@ function Comprobantes({ canEmail }: { canEmail: boolean }) {
       <ActionNotice notice={message} />
     </section>
   );
+}
+
+type InventoryRow = { flightId: string; date: string; capacityEconomy: number; capacityFirst: number;
+  seatsEconomy: number; seatsFirst: number; soldEconomy: number; soldFirst: number; soldTotal: number;
+  assignedEconomy: number; assignedFirst: number };
+
+function InventorySummary() {
+  const { data, error } = useMock<InventoryRow[]>("inventory");
+  const [flightId, setFlightId] = useState("");
+  const selected = (data ?? []).filter((row) => !flightId || row.flightId === flightId).slice(0, 60);
+  return <section className="panel inventory-summary" aria-label="Cupos vendidos por vuelo y clase">
+    <div className="panel-title"><h2>Cupos vendidos y asientos asignados</h2></div>
+    <p className="form-hint">Una venta ocupa cupo comercial. El asiento físico se asigna al hacer check-in; no son el mismo contador.</p>
+    <label>Vuelo<select value={flightId} onChange={(event) => setFlightId(event.target.value)}><option value="">Todos los vuelos</option>{data?.map((row) => <option key={row.flightId} value={row.flightId}>{row.flightId} · {displayDate(row.date)}</option>)}</select></label>
+    {error && <p role="alert" className="error-text">{error}</p>}
+    {!data && !error && <p role="status">Cargando inventario…</p>}
+    {data && selected.length === 0 && <p className="empty-inline">No hay vuelos para mostrar.</p>}
+    {selected.map((row) => <div key={row.flightId} className="inventory-flight">
+      <h3>{row.flightId} · {displayDate(row.date)}</h3>
+      <div className="inventory-table-scroll" tabIndex={0} aria-label={`Inventario del vuelo ${row.flightId}`}>
+        <table><caption className="form-hint">Total vendido: {row.soldTotal} pasaje(s)</caption>
+          <thead><tr><th scope="col">Clase</th><th scope="col">Capacidad</th><th scope="col">Vendidos</th><th scope="col">Disponibles</th><th scope="col">Asientos asignados</th></tr></thead>
+          <tbody><tr><th scope="row">Economy</th><td>{row.capacityEconomy}</td><td>{row.soldEconomy}</td><td>{row.seatsEconomy}</td><td>{row.assignedEconomy}</td></tr>
+            <tr><th scope="row">Primera</th><td>{row.capacityFirst}</td><td>{row.soldFirst}</td><td>{row.seatsFirst}</td><td>{row.assignedFirst}</td></tr></tbody>
+        </table>
+      </div>
+    </div>)}
+    {!flightId && (data?.length ?? 0) > 60 && <p className="form-hint">Seleccioná un vuelo para consultar el resto de los resultados.</p>}
+  </section>;
 }
 
 function ResourceManager({ resource, live }: { resource: EditableResource; live: boolean }) {
@@ -903,14 +1014,7 @@ function Tickets() {
 }
 
 function Reports({ live }: { live: boolean }) {
-  const { data, error } = useMock<{ flightId: string; cabin: string; occupancy: number }[]>("reports");
-  function exportCsv() {
-    if (!data) return;
-    const cell = (value: string) => `"${(/^[=+@-]/.test(value) ? "'" : "") + value.replaceAll('"', '""')}\"`;
-    const csv = "Vuelo,Clase,Ocupación (%)\r\n" + data.map((row) => [cell(row.flightId), cell(row.cabin), row.occupancy].join(",")).join("\r\n");
-    downloadFile("SIGV-ocupacion.csv", `\uFEFF${csv}`, "text/csv;charset=utf-8");
-  }
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">OCUPACIÓN DE VUELOS</p><h2>Asientos vendidos por clase</h2></div><span className="subtle-count">{live ? "Datos en línea" : "Cifras de prueba"}</span></div>{error ? <p role="alert" className="error-text">{error}</p> : !data ? <p role="status">Cargando reporte…</p> : <><div className="action-row">{live ? <Link className="button small" href="/api/reports/occupancy/download" download prefetch={false}>Descargar CSV</Link> : <button className="button small" type="button" onClick={exportCsv}>Descargar CSV de prueba</button>}</div><div className="report-list">{data.map((row) => <div className="report-row" key={`${row.flightId}-${row.cabin}`}><div><strong>{row.flightId}</strong><span>{row.cabin}</span></div><div className="report-bar" aria-label={`${row.occupancy}% de ocupación`}><span style={{ width: `${row.occupancy}%` }} /></div><strong>{row.occupancy}%</strong></div>)}</div></>}{!live && <p className="form-hint">Cifras simuladas para revisar el formato del reporte.</p>}</section>;
+  return <OccupancyReport live={live} />;
 }
 
 function Dashboard({ module, sprint, live }: { module: Module; sprint: number; live: boolean }) {
@@ -929,13 +1033,15 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
-  if (module.slug === "manifiesto") return <Manifest />;
+  if (module.slug === "manifiesto") return <><InventorySummary /><Manifest /></>;
   if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "facturas") return <Comprobantes canEmail={sprint >= resourceSprint.receipts} />;
   if (module.resource === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
-  if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
+  if (module.resource === "seats") return <><InventorySummary />{live ? <DomainManager resource="seats" canEdit={module.role === "admin"} /> : <GenericCollection resource="seats" live={false} />}</>;
+  if (module.resource === "capacities") return <><InventorySummary /><ResourceManager resource="capacities" live={live} /></>;
+  if (live && ["aircraft", "schedules", "frequencies", "configurations"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations"} canEdit={module.role === "admin"} />;
   if (["airports", "capacities", "fares", "users", "notifications"].includes(module.resource)) return <ResourceManager resource={module.resource as EditableResource} live={live} />;
   return <GenericCollection resource={module.resource} live={live} />;
 }

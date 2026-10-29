@@ -31,6 +31,11 @@ const businessMessages = new Set([
   "El teléfono debe tener entre 6 y 15 dígitos. Se admiten espacios, paréntesis, guiones y el prefijo +.",
   "El documento debe tener entre 6 y 8 dígitos, sin letras ni espacios.",
   "Ese documento ya tiene un pasaje para este vuelo.",
+  "El vuelo está en estado terminal: Cancelado.", "El vuelo está en estado terminal: Reprogramado.",
+  "El vuelo está en estado terminal: Operado.", "La salida programada no se modifica.",
+  "No se puede cambiar la fecha de servicio dentro de las próximas 48 horas.",
+  "Ingresá la nueva hora de salida para registrar la demora.",
+  "La demora debe tener una hora posterior a la salida programada.", "Cambios de vuelo inválidos.",
 ]);
 
 export function databaseError(error: { code?: string; message: string }): ApiError {

@@ -55,7 +55,8 @@ export const resourceSprint: Record<string, 1 | 2 | 3> = {
   users: 1, profile: 1, auth: 1, reservations: 1, payments: 1,
   invoices: 1, seats: 2, receipts: 2,
   disruptions: 2, manifest: 2, "check-in": 2, "boarding-passes": 2, notifications: 2, "flight-logs": 2,
-  tickets: 3, reports: 3,
+  tickets: 3, reports: 3, inventory: 1,
+  "flight-mail": 2,
 };
 
 export function roleModules(role: Role, sprint: number) {

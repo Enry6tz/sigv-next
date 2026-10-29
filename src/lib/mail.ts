@@ -29,6 +29,7 @@ export async function sendMail(mail: Mail) {
   transporter ??= nodemailer.createTransport({
     host: config.host, port: config.port, secure: config.port === 465,
     auth: { user: config.user, pass: config.pass },
+    connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
   });
   await transporter.sendMail({
     from: config.from, to: mail.to, subject: mail.subject, text: mail.text, html: mail.html,

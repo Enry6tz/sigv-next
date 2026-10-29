@@ -26,7 +26,7 @@ export function stopsLabel(flight: Flight) {
 }
 
 export function cabinAvailable(flight: Flight, cabin: Cabin, count: number) {
-  return flight.status !== "Cancelado" && !flight.archivedAt &&
+  return ["Activo", "Retrasado"].includes(flight.status) && !flight.archivedAt &&
     (cabin === "Economy" ? flight.seatsEconomy : flight.seatsFirst) >= count;
 }
 

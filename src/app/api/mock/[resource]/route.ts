@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { airports, flights, mockCollections, reservation } from "@/lib/mock-data";
+import { airports, flights, mockCollections, reservation, mockReportFlights, mockReportReservations } from "@/lib/mock-data";
+import { buildOccupancyReport } from "@/lib/occupancy-report";
 import { resourceSprint } from "@/lib/catalog";
 import { appSprint, dataProvider } from "@/lib/sprint";
 import { ApiError, readResource, writeResource } from "@/lib/supabase/resources";
@@ -8,6 +9,10 @@ import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/fl
 import { adminFlightDto } from "@/lib/admin-flights";
 import { cabinAvailable, validReturnFlight, type Cabin } from "@/lib/passenger-search";
 import { documentProblem, emailProblem, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
+import { simulatedPaymentResult, PAYMENT_DECLINED_MESSAGE } from "@/lib/payment-simulation";
+import { flightPolicyProblem, nextFlightStatus } from "@/lib/flight-policy";
+import { summarizeInventory } from "@/lib/inventory";
+import { changeReason } from "@/lib/flight-change-mail";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +44,15 @@ export async function GET(request: NextRequest, context: Context) {
     }
   }
   let data = mockCollections[resource] ?? [];
+  if (resource === "inventory") data = flights.filter((flight) => !request.nextUrl.searchParams.get("flightId") || flight.id === request.nextUrl.searchParams.get("flightId"))
+    .map((flight) => { const sold = flight.id === reservation.flightId ? reservation.seats : 0;
+      const inventory = { capacityEconomy: flight.seatsEconomy + sold, capacityFirst: flight.seatsFirst, seatsEconomy: flight.seatsEconomy, seatsFirst: flight.seatsFirst };
+      return { flightId: flight.id, date: flight.date, ...inventory, ...summarizeInventory(inventory) }; });
+  if (resource === "disruptions") data = flights.map((flight) => ({ flightId: flight.id, code: flight.code ?? flight.id,
+    origin: flight.origin, destination: flight.destination, date: flight.date, departure: flight.departure, arrival: flight.arrival,
+    scheduledDeparture: flight.scheduledDeparture ?? flight.departure, kind: flight.status === "Retrasado" ? "Retraso" : "Sin contingencia",
+    affectedBookings: flight.id === reservation.flightId ? 1 : 0, status: flight.status }));
+  if (resource === "flight-mail") return NextResponse.json({ mode: "mock", resource, data: { configured: false, items: [], attempts: [] } }, { headers: { "Cache-Control": "no-store" } });
   if (resource === "admin-flights") data = flights.map((flight) => adminFlightDto({
     id: flight.id, code: flight.id, origin: flight.origin, destination: flight.destination,
     aircraft_id: null, aircraft: null, departure: flight.departure, arrival: flight.arrival,
@@ -58,6 +72,10 @@ export async function GET(request: NextRequest, context: Context) {
     );
   }
   if (resource === "airports") data = airports;
+  if (resource === "reports") {
+    try { data = buildOccupancyReport(mockReportFlights, mockReportReservations, request.nextUrl.searchParams); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Filtros inválidos" }, { status: 400 }); }
+  }
   return NextResponse.json({ mode: "mock", sprint: appSprint, resource, data }, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -75,6 +93,8 @@ export async function POST(request: NextRequest, context: Context) {
   if (dataProvider === "supabase") {
     try {
       const data = await writeResource(resource, "POST", payload);
+      if (resource === "payments" && (data as { status?: string }).status === "RECHAZADO")
+        return NextResponse.json({ error: PAYMENT_DECLINED_MESSAGE, code: "PAYMENT_DECLINED", mode: "supabase", data }, { status: 402, headers: { "Cache-Control": "private, no-store" } });
       return NextResponse.json({ mode: "supabase", persisted: true, resource, data }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
     } catch (error) {
       return liveError(error);
@@ -126,6 +146,8 @@ export async function POST(request: NextRequest, context: Context) {
   if (resource === "payments") {
     if (!payload.reservationCode) return NextResponse.json({ error: "Falta el código de reserva" }, { status: 400 });
     if (payload.returnReservationCode === payload.reservationCode) return NextResponse.json({ error: "Las reservas de ida y vuelta deben ser diferentes" }, { status: 400 });
+    if (!simulatedPaymentResult(String(payload.cardNumber ?? "")).approved)
+      return NextResponse.json({ mode: "mock", persisted: false, error: PAYMENT_DECLINED_MESSAGE, code: "PAYMENT_DECLINED", data: { reservationCode: payload.reservationCode, status: "RECHAZADO" } }, { status: 402 });
     return NextResponse.json({ mode: "mock", persisted: false, data: { reservationCode: payload.reservationCode, status: "Aprobado (simulado)", invoice: "FAC-DEMO-2026-001", ...(payload.returnReservationCode ? { returnPayment: { reservationCode: payload.returnReservationCode, status: "Aprobado (simulado)", invoice: "FAC-DEMO-2026-002" } } : {}) } }, { status: 202 });
   }
   return NextResponse.json({ mode: "mock", persisted: false, resource, data: { acceptedFields: Object.keys(payload).filter((key) => key !== "password"), status: "Recibido en simulación" } }, { status: 202 });
@@ -135,7 +157,7 @@ export async function PATCH(request: NextRequest, context: Context) {
   const { resource } = await context.params;
   const blocked = gate(resource);
   if (blocked) return blocked;
-  if (!["admin-flights", "flights", "airports", "aircraft", "schedules", "configurations", "seats", "capacities", "fares", "profile", "users", "reservations", "disruptions", "notifications"].includes(resource)) {
+  if (!["admin-flights", "flights", "airports", "aircraft", "schedules", "configurations", "seats", "capacities", "fares", "profile", "users", "reservations", "disruptions", "notifications", "payments"].includes(resource)) {
     return NextResponse.json({ error: "Operación no disponible para este recurso" }, { status: 405 });
   }
   let payload: Record<string, unknown>;
@@ -152,6 +174,26 @@ export async function PATCH(request: NextRequest, context: Context) {
     } catch (error) {
       return liveError(error);
     }
+  }
+  if (["flights", "disruptions"].includes(resource) && payload.reason !== undefined) {
+    try { changeReason(payload.reason); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Motivo inválido" }, { status: 400 }); }
+  }
+  if (["flights", "disruptions"].includes(resource)) {
+    const flight = flights.find((row) => row.id === payload.flightId);
+    if (!flight) return NextResponse.json({ error: "Vuelo no encontrado" }, { status: 404 });
+    const change = { ...(typeof payload.date === "string" ? { date: payload.date } : {}),
+      ...(typeof payload.departure === "string" ? { departure: payload.departure } : {}),
+      ...(typeof payload.arrival === "string" ? { arrival: payload.arrival } : {}),
+      ...(typeof payload.status === "string" ? { status: payload.status } : {}) };
+    const problem = flightPolicyProblem(flight, change);
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    return NextResponse.json({ mode: "mock", persisted: false, data: { ...flight, ...change, status: nextFlightStatus(flight, change),
+      reason: changeReason(payload.reason), acceptedFields: Object.keys(payload).filter((key) => key !== "password") } }, { status: 202 });
+  }
+  if (resource === "payments") {
+    if (payload.action !== "refund" || !payload.reservationCode) return NextResponse.json({ error: "Reembolso simulado inválido" }, { status: 400 });
+    return NextResponse.json({ mode: "mock", persisted: false, data: { reservationCode: payload.reservationCode, status: "Cancelada", refundStatus: "Reembolsado (simulado)" } }, { status: 202 });
   }
   return NextResponse.json({ mode: "mock", persisted: false, resource, data: { acceptedFields: Object.keys(payload).filter((key) => key !== "password"), status: "Cambio simulado" } }, { status: 202 });
 }

@@ -1,7 +1,8 @@
 export type Flight = {
   id: string; code?: string; origin: string; destination: string; departure: string;
   arrival: string; date: string; economy: number; first: number;
-  seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado";
+  seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado" | "Reprogramado" | "Operado";
+  scheduledDeparture?: string; takenOffAt?: string | null; timeZone?: string;
   isDemo?: boolean; archivedAt?: string | null;
   stops?: string[]; durationMinutes?: number;
   baggageIncluded?: boolean; seatSelectionEnabled?: boolean; onlineCheckInEnabled?: boolean;
@@ -37,6 +38,18 @@ export const reservation = {
   code: "SIGV-7K2P9", flightId: "AR-1420", passenger: "Lucía Fernández",
   document: "30123456", cabin: "Economy", seats: 2, status: "Confirmada",
 };
+
+// Fixtures explícitamente simulados para verificar reportes sin crear ventas reales.
+export const mockReportReservations = [
+  { code: reservation.code, flightId: reservation.flightId, cabin: "Economy", status: "Confirmada", passengers: [
+    { first_name: "Lucía", last_name: "Fernández", document: "30123456" },
+    { first_name: "Tomás", last_name: "Prueba", document: "30123457" },
+  ] },
+  { code: "DEMO-PENDIENTE", flightId: reservation.flightId, cabin: "Economy", status: "Pendiente de pago", passengers: [{ first_name: "Pendiente", last_name: "Prueba", document: "30123458" }] },
+  { code: "DEMO-CANCELADA", flightId: reservation.flightId, cabin: "Economy", status: "Cancelada", passengers: [{ first_name: "Cancelada", last_name: "Prueba", document: "30123459" }] },
+];
+export const mockReportFlights = flights.map((flight) => ({ id: flight.id, date: flight.date,
+  capacityEconomy: flight.seatsEconomy + (flight.id === reservation.flightId ? 2 : 0), capacityFirst: flight.seatsFirst }));
 
 export const mockCollections: Record<string, unknown> = {
   dashboard: { flights: flights.length, activeFlights: flights.filter((f) => f.status === "Activo").length, reservations: 24, checkIns: 13 },
