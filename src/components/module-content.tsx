@@ -12,6 +12,8 @@ import { mutate } from "@/lib/mutations";
 import { boardingPassPayload, qrMatrix } from "@/lib/boarding-pass";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
+import { DECLINED_TEST_CARD } from "@/lib/payment-simulation";
+import { terminalFlightStates } from "@/lib/flight-policy";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 import {
   cardNumberProblem,
@@ -201,7 +203,11 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
           <label>CUOTAS
             <input name="installments" defaultValue="1 cuota sin interés" readOnly />
           </label>
-          <p className="form-hint"><span aria-hidden="true">🔒</span> Tu información de pago está cifrada con tecnología SSL de 256 bits. SIGV nunca almacena el número completo de tu tarjeta.</p>
+          <div className="payment-demo-guide" role="note" aria-label="Tarjetas de prueba">
+            <strong>Pago simulado: usá únicamente datos de prueba.</strong>
+            <p>Aprobación: <code>4111 1111 1111 1111</code>. Rechazo garantizado: <code>{groupCardNumber(DECLINED_TEST_CARD)}</code>.</p>
+            <p>Completá un titular de prueba, vencimiento futuro y CVV de 3 dígitos. Un rechazo no confirma la reserva ni genera comprobantes.</p>
+          </div>
           <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : "Confirmar y Pagar"}</button>
         </form>
         {message && <ActionNotice notice={message} />}
@@ -565,7 +571,7 @@ function BoardingPass() {
 
 type EditableResource = "airports" | "capacities" | "fares" | "users" | "notifications";
 
-type DisruptionRow = { flightId: string; code?: string; origin?: string; destination?: string; date?: string; departure?: string; arrival?: string; kind: string; affectedBookings: number; status: string };
+type DisruptionRow = { flightId: string; code?: string; origin?: string; destination?: string; date?: string; departure?: string; arrival?: string; scheduledDeparture?: string; kind: string; affectedBookings: number; status: string };
 type FlightChange = { row: DisruptionRow; status: string; date?: string; departure?: string; arrival?: string };
 
 const disruptionLimit = 60;
@@ -628,7 +634,8 @@ function Disruptions() {
   function reschedule(event: FormEvent<HTMLFormElement>, row: DisruptionRow) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    setPending({ row, status: row.status, date: String(form.get("date")), departure: String(form.get("departure")), arrival: String(form.get("arrival")) });
+    const departure = String(form.get("departure"));
+    setPending({ row, status: departure > (row.scheduledDeparture ?? row.departure ?? "") ? "Retrasado" : "Activo", date: String(form.get("date")), departure, arrival: String(form.get("arrival")) });
     setRescheduling(null);
   }
 
@@ -657,6 +664,7 @@ function Disruptions() {
               <article className="record-card" key={row.flightId}>
                 <strong>{row.code ?? row.flightId}{row.origin ? ` · ${row.origin} → ${row.destination}` : ""}</strong>
                 {row.date && <p>{displayDate(row.date)} · {row.departure} → {row.arrival}</p>}
+                {row.scheduledDeparture && <p className="form-hint">Salida programada: {row.scheduledDeparture} · Salida vigente: {row.departure}</p>}
                 <p><Status value={row.status} /></p>
                 <p>Reservas afectadas: {row.affectedBookings}</p>
                 {confirming ? (
@@ -680,12 +688,11 @@ function Disruptions() {
                       <button className="button" type="button" onClick={() => setRescheduling(null)}>Cerrar</button>
                     </div>
                   </form>
-                ) : row.status === "Cancelado" ? (
-                  <p className="form-hint">Vuelo cancelado: sus reservas quedaron &apos;A reagendar&apos; o &apos;A reembolsar&apos;.</p>
+                ) : terminalFlightStates.includes(row.status as typeof terminalFlightStates[number]) ? (
+                  <p className="form-hint">Estado terminal: {row.status}. El vuelo no admite cambios operativos.</p>
                 ) : (
                   <div className="action-row">
-                    <button className="button small" type="button" onClick={() => { setPending(null); setRescheduling(row.flightId); }}>Reprogramar</button>
-                    <button className="button small" type="button" onClick={() => setPending({ row, status: row.status === "Retrasado" ? "Activo" : "Retrasado" })}>{row.status === "Retrasado" ? "Volver a activo" : "Marcar retrasado"}</button>
+                    <button className="button small" type="button" onClick={() => { setPending(null); setRescheduling(row.flightId); }}>Cambiar fecha u horario</button>
                     <button className="button small" type="button" onClick={() => setPending({ row, status: "Cancelado" })}>Cancelar vuelo</button>
                   </div>
                 )}
@@ -694,7 +701,7 @@ function Disruptions() {
           })}
         </div>
       )}
-      <p className="form-hint">Cada cambio se confirma antes de aplicarse, notifica a los pasajeros afectados y queda registrado en Auditoría con el usuario, la fecha y las reservas afectadas.</p>
+      <p className="form-hint">La nueva hora reemplaza a la vigente; las demoras no se acumulan. No se puede cambiar la fecha dentro de las próximas 48 horas. Los cambios de horario conservan asiento y check-in, y quedan registrados en Auditoría.</p>
     </section>
   );
 }
@@ -778,6 +785,35 @@ function Comprobantes({ canEmail }: { canEmail: boolean }) {
       <ActionNotice notice={message} />
     </section>
   );
+}
+
+type InventoryRow = { flightId: string; date: string; capacityEconomy: number; capacityFirst: number;
+  seatsEconomy: number; seatsFirst: number; soldEconomy: number; soldFirst: number; soldTotal: number;
+  assignedEconomy: number; assignedFirst: number };
+
+function InventorySummary() {
+  const { data, error } = useMock<InventoryRow[]>("inventory");
+  const [flightId, setFlightId] = useState("");
+  const selected = (data ?? []).filter((row) => !flightId || row.flightId === flightId).slice(0, 60);
+  return <section className="panel inventory-summary" aria-label="Cupos vendidos por vuelo y clase">
+    <div className="panel-title"><h2>Cupos vendidos y asientos asignados</h2></div>
+    <p className="form-hint">Una venta ocupa cupo comercial. El asiento físico se asigna al hacer check-in; no son el mismo contador.</p>
+    <label>Vuelo<select value={flightId} onChange={(event) => setFlightId(event.target.value)}><option value="">Todos los vuelos</option>{data?.map((row) => <option key={row.flightId} value={row.flightId}>{row.flightId} · {displayDate(row.date)}</option>)}</select></label>
+    {error && <p role="alert" className="error-text">{error}</p>}
+    {!data && !error && <p role="status">Cargando inventario…</p>}
+    {data && selected.length === 0 && <p className="empty-inline">No hay vuelos para mostrar.</p>}
+    {selected.map((row) => <div key={row.flightId} className="inventory-flight">
+      <h3>{row.flightId} · {displayDate(row.date)}</h3>
+      <div className="inventory-table-scroll" tabIndex={0} aria-label={`Inventario del vuelo ${row.flightId}`}>
+        <table><caption className="form-hint">Total vendido: {row.soldTotal} pasaje(s)</caption>
+          <thead><tr><th scope="col">Clase</th><th scope="col">Capacidad</th><th scope="col">Vendidos</th><th scope="col">Disponibles</th><th scope="col">Asientos asignados</th></tr></thead>
+          <tbody><tr><th scope="row">Economy</th><td>{row.capacityEconomy}</td><td>{row.soldEconomy}</td><td>{row.seatsEconomy}</td><td>{row.assignedEconomy}</td></tr>
+            <tr><th scope="row">Primera</th><td>{row.capacityFirst}</td><td>{row.soldFirst}</td><td>{row.seatsFirst}</td><td>{row.assignedFirst}</td></tr></tbody>
+        </table>
+      </div>
+    </div>)}
+    {!flightId && (data?.length ?? 0) > 60 && <p className="form-hint">Seleccioná un vuelo para consultar el resto de los resultados.</p>}
+  </section>;
 }
 
 function ResourceManager({ resource, live }: { resource: EditableResource; live: boolean }) {
@@ -929,13 +965,15 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
   if (module.slug === "check-in") return <CheckIn live={live} />;
-  if (module.slug === "manifiesto") return <Manifest />;
+  if (module.slug === "manifiesto") return <><InventorySummary /><Manifest /></>;
   if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "facturas") return <Comprobantes canEmail={sprint >= resourceSprint.receipts} />;
   if (module.resource === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
-  if (live && ["aircraft", "schedules", "frequencies", "configurations", "seats"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations" | "seats"} canEdit={module.role === "admin"} />;
+  if (module.resource === "seats") return <><InventorySummary />{live ? <DomainManager resource="seats" canEdit={module.role === "admin"} /> : <GenericCollection resource="seats" live={false} />}</>;
+  if (module.resource === "capacities") return <><InventorySummary /><ResourceManager resource="capacities" live={live} /></>;
+  if (live && ["aircraft", "schedules", "frequencies", "configurations"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations"} canEdit={module.role === "admin"} />;
   if (["airports", "capacities", "fares", "users", "notifications"].includes(module.resource)) return <ResourceManager resource={module.resource as EditableResource} live={live} />;
   return <GenericCollection resource={module.resource} live={live} />;
 }

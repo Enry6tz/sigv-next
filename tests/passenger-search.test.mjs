@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { durationMinutes, stopsLabel, searchFlights, bookingHref, parsePassengerCount, validReturnFlight, fareAvailable } from "../src/lib/passenger-search.ts";
+import { durationMinutes, stopsLabel, searchFlights, bookingHref, parsePassengerCount, validReturnFlight, fareAvailable, cabinAvailable } from "../src/lib/passenger-search.ts";
 
 const flight = { id: "AR-1420", origin: "EZE", destination: "BRC", date: "2026-10-14", departure: "23:30", arrival: "01:15", economy: 100, first: 250, seatsEconomy: 5, seatsFirst: 1, status: "Activo" };
 
@@ -58,4 +58,8 @@ test("conserva vuelo, cabina y pasajeros al continuar a la compra", () => {
   assert.equal(url.searchParams.get("passengers"), "3");
   for (const value of ["0", "10", "2.5", "oops", ""]) assert.equal(parsePassengerCount(value), 1);
   assert.equal(parsePassengerCount("9"), 9);
+});
+test("US-033: estados terminales no ofrecen cupos para nuevas ventas", () => {
+  for (const status of ["Cancelado", "Reprogramado", "Operado"])
+    assert.equal(cabinAvailable({ status, seatsEconomy: 10, seatsFirst: 2 }, "Economy", 1), false);
 });

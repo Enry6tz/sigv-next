@@ -10,6 +10,7 @@ import { mailConfigured } from "@/lib/mail";
 import { appTimeZone } from "@/lib/sprint";
 import { boardingPassCode } from "@/lib/boarding-pass";
 import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
+import { flightStatus } from "@/lib/flight-policy";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
@@ -48,11 +49,16 @@ const auditFields: Record<string, string> = {
 };
 
 function flightDto(row: Json) {
+  const operational = { date: String(row.flight_date), departure: String(row.departure), status: String(row.status),
+    scheduledDeparture: String(row.scheduled_departure ?? row.departure), takenOffAt: row.taken_off_at as string | null,
+    timeZone: String(row.service_timezone ?? appTimeZone) };
   return {
     id: row.id, origin: row.origin, destination: row.destination,
     code: displayFlightCode({ id: String(row.id), scheduleId: typeof row.schedule_id === "string" ? row.schedule_id : null }),
     date: row.flight_date, departure: String(row.departure).slice(0, 5),
-    arrival: String(row.arrival).slice(0, 5), status: row.status,
+    arrival: String(row.arrival).slice(0, 5), status: flightStatus(operational),
+    scheduledDeparture: operational.scheduledDeparture.slice(0, 5), takenOffAt: operational.takenOffAt,
+    timeZone: operational.timeZone,
     economy: Number(row.economy), first: Number(row.first),
     seatsEconomy: row.seats_economy, seatsFirst: row.seats_first,
     isDemo: row.is_demo, archivedAt: row.archived_at,
@@ -137,6 +143,10 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     await requireRole(client, ["admin"]);
     return unwrap(await client.from("flights").select("id,seats_economy,seats_first,capacity_economy,capacity_first"))
       .map((row: Json) => ({ flightId: row.id, economy: row.seats_economy, first: row.seats_first, capacityEconomy: row.capacity_economy, capacityFirst: row.capacity_first }));
+  }
+  if (resource === "inventory") {
+    await requireRole(client, ["admin", "mostrador"]);
+    return unwrap(await client.rpc("sigv_flight_inventory", { p_flight_id: filters.get("flightId") || null }));
   }
   if (resource === "fares") {
     await requireRole(client, ["admin"]);
@@ -225,11 +235,12 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   }
   if (resource === "disruptions") {
     await requireRole(client, ["admin"]);
+    unwrap(await client.rpc("sigv_close_due_flights"));
     const allFlights = await flights(client);
     const allReservations = await reservations(client);
     return allFlights.map((row) => ({
       flightId: row.id, code: row.code, origin: row.origin, destination: row.destination,
-      date: row.date, departure: row.departure, arrival: row.arrival,
+      date: row.date, departure: row.departure, arrival: row.arrival, scheduledDeparture: row.scheduledDeparture,
       kind: row.status === "Cancelado" ? "Cancelación" : row.status === "Retrasado" ? "Retraso" : "Sin contingencia",
       affectedBookings: allReservations.filter((booking) => booking.flightId === row.id && booking.status !== "Cancelada").length,
       status: row.status,
@@ -397,14 +408,18 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     await requireUser(client);
     return unwrap(await client.rpc("sigv_cancel_reservation", { p_code: text(payload.reservationCode) }));
   }
+  if (resource === "payments" && method === "PATCH" && payload.action === "refund") {
+    await requireRole(client, ["admin"]);
+    return unwrap(await client.rpc("sigv_refund_reservation", { p_code: text(payload.reservationCode) }));
+  }
   if (resource === "payments" && method === "POST") {
     await requireUser(client);
     const code = text(payload.reservationCode);
     const returnCode = text(payload.returnReservationCode);
-    const result = returnCode
-      ? unwrap(await client.rpc("sigv_demo_round_trip_payment", { p_code: code, p_return_code: returnCode, p_method: text(payload.method) }))
-      : unwrap(await client.rpc("sigv_demo_payment", { p_code: code, p_method: text(payload.method) }));
-    return { ...(result as Json), receiptEmail: await scheduleReceiptEmail(client, returnCode ? [code, returnCode] : [code]) };
+    const result = unwrap(await client.rpc("sigv_simulated_checkout", { p_code: code, p_method: text(payload.method),
+      p_card_number: typeof payload.cardNumber === "string" ? payload.cardNumber : null, p_return_code: returnCode || null })) as Json;
+    if (result.status === "RECHAZADO" || result.replayed === true) return result;
+    return { ...result, receiptEmail: await scheduleReceiptEmail(client, returnCode ? [code, returnCode] : [code]) };
   }
   if (resource === "receipts" && method === "POST") {
     const userId = await requireUser(client);
@@ -484,7 +499,8 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
     }
     if (payload.restore === true) updates.archived_at = null;
     if (!Object.keys(updates).length) throw new ApiError("No hay cambios válidos");
-    const row = unwrap(await client.from("flights").update(updates).eq("id", text(payload.flightId)).select("*").single());
+    if (payload.reason !== undefined) updates.reason = String(payload.reason);
+    const row = unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates }));
     return flightDto(row as unknown as Json);
   }
   if (["capacities", "fares"].includes(resource) && method === "PATCH") {
@@ -503,7 +519,7 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
   if (resource === "disruptions" && method === "PATCH") {
     await requireRole(client, ["admin"]);
     const status = text(payload.status);
-    if (!["Activo", "Retrasado", "Cancelado"].includes(status)) throw new ApiError("Estado inválido");
+    if (!["Activo", "Retrasado", "Cancelado", "Reprogramado", "Operado"].includes(status)) throw new ApiError("Estado inválido");
     const updates: Json = { status };
     if (payload.date !== undefined) updates.flight_date = text(payload.date);
     if (payload.departure !== undefined) updates.departure = text(payload.departure);
@@ -512,7 +528,9 @@ export async function writeResource(resource: string, method: "POST" | "PATCH" |
       || [updates.departure, updates.arrival].some((value) => value !== undefined && !/^\d{2}:\d{2}$/.test(String(value))))
       throw new ApiError("Ingresá la nueva fecha y los horarios de salida y llegada");
     if (updates.departure !== undefined && updates.departure === updates.arrival) throw new ApiError("Los horarios de salida y llegada deben ser diferentes");
-    return flightDto(unwrap(await client.from("flights").update(updates).eq("id", text(payload.flightId)).select("*").single()));
+    if (payload.reason !== undefined) updates.reason = String(payload.reason);
+    unwrap(await client.rpc("sigv_close_due_flights"));
+    return flightDto(unwrap(await client.rpc("sigv_apply_flight_change", { p_flight_id: text(payload.flightId), p_changes: updates })));
   }
   if (resource === "users" && method === "PATCH") {
     await requireRole(client, ["admin"]);

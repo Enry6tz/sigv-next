@@ -1,7 +1,8 @@
 export type Flight = {
   id: string; code?: string; origin: string; destination: string; departure: string;
   arrival: string; date: string; economy: number; first: number;
-  seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado";
+  seatsEconomy: number; seatsFirst: number; status: "Activo" | "Retrasado" | "Cancelado" | "Reprogramado" | "Operado";
+  scheduledDeparture?: string; takenOffAt?: string | null; timeZone?: string;
   isDemo?: boolean; archivedAt?: string | null;
   stops?: string[]; durationMinutes?: number;
   baggageIncluded?: boolean; seatSelectionEnabled?: boolean; onlineCheckInEnabled?: boolean;
