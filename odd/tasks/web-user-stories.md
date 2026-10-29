@@ -257,12 +257,29 @@ entonces la retención se liberó o tiene vencimiento y no hay cupos huérfanos.
 - "si tienen que migrar bases de datos o lo que sea todos tienen permiso"
 - Agreed exclusions: US-031 and US-032. US-029/030 apply only to the current responsive web application. No PWA, native application, push or offline implementation.
 
+### S11 - SMTP and screenshot follow-up
+
+- "Dale, terminemos lo de SMTP y el programador de correos, y después hacemos el smoke test completo en la web con usuarios de prueba."
+- "Sí, autorizo. Usá el SMTP que ya está configurado en la aplicación para configurar Supabase Auth de SIGV y verificá que llegue el correo de confirmación."
+- "tambien hace los smoke test usando el navegador y sacando capturas de pantalla y guardalas en una carpeta upor UUS"
+- "dejemoslo asi a lo katalon no hay problema"
+- Authorized Gmail browser session and recipient were supplied by the user. Do not commit mailbox contents, credentials, tokens or private screenshots. Preserve the distinction between Auth mail and application contingency mail.
+
+### S12 - Demo identities
+
+- "creame usuarios de prueba en  supabase uno para cada rol y pasame usuarios y contraseñas"
+- "no le pongas enrique seitz ponele nombres randoms"
+- Create only three new fictitious identities in the authorized SIGV destination, one per existing application role. Do not alter existing users or disclose their credentials. Return the new credentials privately, never in repository files or screenshots. Keep email addresses under reserved example.com; use the separately authorized mailbox only as a smoke-test contact.
+
 ## Tasks
 
 - T1 | S7-S9, S10 | delegated: core-us033-035 | verified with accepted S7 delay-bound exception | flight policy, sold inventory and simulated rejection | 3cf0bfa
 - T2 | S1-S2, S10 | delegated: mail-us025-026 | implementation and destination SQL verified; live SMTP and deployed scheduler pending | contingency email outbox, custom reason and delivery history | a52fea2
 - T3 | S3-S6, S10 | delegated: web-us027-030 | mock flows and public destination search verified; authenticated remote UI and physical device pending | occupancy/detail reports and responsive booking/search | bf35ca4
 - T4 | S1-S10 | inline: parent tester/integrator, delegated final long checks | checks and Spanish smoke guide verified; external proof explicitly pending | integration and demo guide | 7f6ad78
+- T5 | S11 | inline: authorized Auth configuration | verified: SMTP persisted, transport authenticated, access email delivered; account was already confirmed | documentation checkpoint pending
+- T6 | S1-S11 | inline: parent browser tester; read-only account-map handoff | primary authenticated smoke observed for every in-scope US; remaining edge-case proof and scheduler pending | one screenshot folder per US; evidence matrix records limits
+- T7 | S12 | inline: Supabase official user-creation UI and scoped role/profile assignment | verified: three browser logins, correct roles/profiles and independent read-only verification | new credentials delivered privately, never committed
 
 ## Log
 
@@ -332,3 +349,32 @@ bueno lanza 3 agentes full stack que implementen todas las UUS, los pagos  son s
 - `docs/DEMO-SMOKE-WEB.md` includes each in-scope US, expected results and a dedicated pending-work table. User: "despues create un md con el smoke test y lo que queda pendiente".
 - Remaining operational proof: authorized test-mailbox SMTP delivery, server-only processor credentials and periodic mail scheduling in a deployed environment, authenticated destination UI smoke and physical-device testing. These are distinct from the applied database migrations. US-033's delay-bound definition remains accepted pending; US-031/032 remain excluded.
 - Risk: items 1, 2, 3, 4 and 5 (stored-data migration, permissions, shared contracts, locking and external environment). RDD is off by explicit global preference; no review or consent lifecycle was started. No authoritative Engram session identity is available; mirror remains pending rather than fabricating attribution.
+
+### L8 - SMTP Auth and browser evidence checkpoint 2026-10-29
+
+- PR published against main: https://github.com/Enry6tz/sigv-next/pull/13. Last published head at this checkpoint: 9b5d641. No merge or application deployment was performed.
+- The user explicitly authorized reading the application's local environment and transferring its existing SMTP settings into SIGV Supabase Auth. The custom SMTP toggle persisted enabled after reload; stored password remained hidden. No secrets were printed or committed.
+- A local Nodemailer verify() using the authorized configuration succeeded. The selected existing account had already been confirmed on 2026-10-02; its later signup log said user repeated signup. The public resend UI's generic success response is not delivery proof for an already-confirmed account.
+- A passwordless access email was requested for the same authorized account. Auth user logs recorded HTTP 200 POST /magiclink; the SIGV sign-in email arrived in the explicitly authorized Gmail browser session. Its single-use URL/token was not printed or saved. This establishes transport/Auth delivery, not completion of US-025/026 application mail flow.
+- The access link used the project's configured Vercel site URL rather than the local PR checkout. No redirect allowlist, password or role was changed. A local authenticated test session is still required for the requested full browser smoke.
+- Created local qa-evidence/2026-10-29/AUTH and one folder per in-scope US. Saved SMTP, existing-confirmation, HTTP-200 and inbox-arrival captures. Empty US folders are not represented as completed tests.
+- Read-only web agent mapped demo setup: no reusable current browser credentials/provisioner were documented. SQL probe identities are rolled back. It also confirmed that contingency after() processing drains the global queue, so future smoke must verify recipient isolation first.
+- User accepted leaving Katalon unchanged. No hydration warning suppression or extension settings change was made. No Engram writes were attempted without a registered runtime identity.
+
+### L9 - Test-account authorization and naming correction 2026-10-29
+
+- User requested one Supabase account per role and delivery of their passwords, then corrected the proposed names to random fictitious identities rather than the user's name. Prepared Clara Molina (admin), Bruno Arias (mostrador) and Natalia Soto (pasajero), all under reserved example.com addresses. The existing role check permits exactly admin, mostrador and pasajero.
+- Use the official Auth creation UI, preserving the existing signup trigger's default pasajero role. Only the three newly created rows may receive later application role/profile updates. No raw inserts into auth.users, password resets, existing-user changes or auth redirect changes are authorized by this task.
+- These intentionally auto-confirmed demo identities cannot receive email at their fictitious addresses. Application mail smoke must use the separately authorized real contact and verify queue isolation. Passwords remain ephemeral/private and must not enter this log, the PR or captured screenshots.
+
+### L10 - Fictitious accounts and authenticated browser smoke 2026-10-29
+
+- Created exactly three Auth identities through the official Dashboard Create new user form: Clara Molina (admin), Bruno Arias (mostrador), Natalia Soto (pasajero). All have reserved example.com addresses, separate generated passwords and confirmed email status. Assigned application roles/profile names/documents in one transaction guarded by exact new Auth IDs and email matches. No direct auth.users inserts or existing-user role/password updates were performed.
+- Parent browser login checks passed for all three. Admin reached admin/inicio; mostrador reached mostrador/inicio; passenger reached the passenger search. Mostrador and pasajero attempts at admin/reportes redirected away from administration. Screenshots AUTH/06-11 capture roles and guards, without passwords.
+- Independent verifier confirmed Auth IDs/email confirmation, sigv_role RPC, exact own-profile name/document and role visibility. Non-admin users could not list other roles; admin could see the three new assignments. Initial verifier query used id rather than user_id, produced 42703, and was corrected without source changes. Existing-user preservation was not independently audited beyond the scoped commands.
+- Prepared only two new synthetic flights QA-WEB-1029-A/B; checked global queue isolation before live-mail smoke. Passenger created reservation SIGV-6DECF855 for two synthetic passengers on flight A, contact restricted to the authorized mailbox. Browser simulated decline preserved the pending state; subsequent approval confirmed the reservation and delivered the receipt email. No real money was processed.
+- Real mobile search showed viewport/document width 390/390 and preserved the selected flight/cabin/two passengers. Real admin report filtered to QA flight/Economy showed two sold, capacity10, 20%; detail contained exactly the two synthetic passengers. Inventory showed two sold, eight available, zero assigned.
+- Browser schedule changes 10:00 to 11:00 then 11:30 persisted absolute replacement. Literal two-line custom reason with HTML-like characters was received as safe text in Gmail; next operation began with empty reason. Attempt to change flight B's date within 48h was rejected and retained 2026-10-30. Cancellation of flight A became terminal, moved the synthetic reservation to A reagendar and delivered the cancellation notice.
+- Final scoped DB read: flight A Cancelado at 11:30; flight B date unchanged; three outbox events, three sent, zero pending; every recipient was the authorized mailbox. All nine in-scope US folders have browser captures. SMTP app delivery is now observed, not merely configured.
+- Browser CSV click did not produce a capturable download event; file contents for this real browser export were not verified. Remaining unexecuted browser edge cases include physical-device review, nine-passenger live purchase, network-loss replay, check-in retention, refund/cancellation inventory restoration, real concurrent sale and SMTP retry recovery (earlier isolated/automated proof remains separate). Do not claim full acceptance from the primary smoke alone.
+- Retained the two clearly tagged synthetic flights/reservation for demo inspection; did not delete stored data. The mail scheduler still needs a chosen runtime/deployment and server-only configuration. The three new passwords were excluded from documentation/PR/evidence and the private verifier scratch is removed after verification.

@@ -33,7 +33,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 7. Para reintentos sin intervención, configurar el programador descrito en [la guía de correos](DEMO-US025-026.md). El procesamiento inicial y el botón administrativo no sustituyen una ejecución periódica.
 8. No publicar `SUPABASE_SERVICE_ROLE_KEY` ni `NOTIFICATION_PROCESSOR_SECRET` en variables `NEXT_PUBLIC_`.
 
-Las dos migraciones se aplicaron y verificaron el 29/10/2026 en el destino autorizado `zfchbgjwspslpqnsdkrs`. No volver a aplicarlas para ejecutar esta demo. También se probaron en PostgreSQL 14 local descartable. La entrega SMTP real y el programador externo de reintentos no están verificados ni configurados por esta entrega.
+Las dos migraciones se aplicaron y verificaron el 29/10/2026 en el destino autorizado `zfchbgjwspslpqnsdkrs`. No volver a aplicarlas para ejecutar esta demo. También se probaron en PostgreSQL 14 local descartable. La entrega SMTP real ya se verificó en Auth y en los recorridos principales de la aplicación; el programador externo de reintentos continúa sin configurar.
 
 ## US-025 Correos de contingencia
 
@@ -160,7 +160,8 @@ Detener el servidor antes de `npm run build`. No ejecutar los tests SQL sobre un
 - Navegador Edge: reportes en escritorio/390 px, detalle, filtros, fechas inválidas, rechazo/aprobación y reconciliación sin segundo POST.
 - Supabase destino: migraciones aplicadas; probes transaccionales de estados, check-in, cupos, rechazo, idempotencia, reembolso, destinatarios, motivo literal, leases, reintentos y RLS aprobados con rollback. No se conservaron los vuelos sintéticos.
 - Web conectada al destino: health `supabase`, Sprint 3; búsqueda AEP → COR del 30/10/2026 con AR-456, precios y selección de Economy, continuación que conserva parámetros y exige autenticación. Ancho 390 px sin desbordamiento horizontal. Reportes/cola y procesador rechazan acceso sin sesión/secreto con 401. Las pantallas administrativas autenticadas sobre datos remotos requieren una sesión de prueba; no se crearon cuentas ni se reemplazaron contraseñas para obtenerla.
-- No se verificaron un dispositivo físico ni entrega SMTP real. El programador externo de la cola de correo requiere despliegue y variables servidor; el cron de cierre de vuelos sí quedó activo en Supabase.
+- Supabase Auth: SMTP personalizado configurado con las credenciales existentes autorizadas. Conexión/autenticación SMTP local aprobada y enlace de acceso de SIGV recibido en Gmail. Esto no sustituye el smoke de correos de contingencia de US-025/026.
+- No se verificaron un dispositivo físico ni el recorrido autenticado completo de la cola de correo. El programador externo de la cola requiere despliegue y variables servidor; el cron de cierre de vuelos sí quedó activo en Supabase.
 - US-033 se conserva como fue implementada, con el único pendiente de interpretación de la hora máxima de demora aceptado por el solicitante.
 
 ## Pendientes para la puesta en servicio
@@ -169,7 +170,38 @@ Detener el servidor antes de `npm run build`. No ejecutar los tests SQL sobre un
 | --- | --- |
 | US-033: hora máxima de demora | Definición de negocio aceptada como pendiente. Precisar el límite de la nueva salida antes de cambiar la regla actual. No impide revisar esta PR. |
 | Reintentos de correo desatendidos | Desplegar la versión de esta PR; configurar `NOTIFICATION_PROCESSOR_SECRET` y `SUPABASE_SERVICE_ROLE_KEY` solo en servidor, y un programador que invoque el endpoint cada minuto. No se crearon ni exportaron credenciales administrativas desde el navegador. La primera tanda y el procesamiento manual sí están implementados. |
-| Entrega SMTP de extremo a extremo | Probar con un buzón de pruebas autorizado. No se enviaron mensajes a pasajeros reales; las pruebas de transporte usan dobles y las pruebas SQL se revirtieron. Variables SMTP presentes no equivalen a entrega comprobada. |
-| Validación física, autenticación y despliegue | Ejecutar la guía en un teléfono real y repetir el recorrido autenticado con cuentas de prueba en el entorno que despliegue la PR. No había una sesión de aplicación autenticada disponible en el navegador utilizado. La revisión responsive a 390 px no sustituye un dispositivo físico. No se realizó merge ni despliegue a producción. |
+| Recuperación de SMTP | La entrega real de comprobante, cambios de horario y cancelación ya se verificó desde la web con una reserva sintética y el buzón autorizado. Falta repetir desde navegador la caída/recuperación del transporte y el drenaje masivo programado. La cola es global: comprobar aislamiento de destinatarios antes de procesarla. |
+| Validación física y despliegue | Los accesos de los tres roles y los recorridos principales ya se verificaron en localhost contra Supabase. Falta teléfono físico y repetición en el despliegue de la PR. La revisión responsive a 390 px no sustituye un dispositivo físico. No se realizó merge ni despliegue a producción. |
 
 Estos pendientes son distintos de las migraciones: ambas ya quedaron aplicadas al destino autorizado, y el cierre periódico de vuelos ya registró una ejecución `succeeded`. Los conteos finales conservaron 1211 vuelos, 19 reservas, 27 pasajeros y 15 pagos; no quedaron vuelos sintéticos ni correos de prueba en cola.
+
+## Evidencias de navegador del 29/10/2026
+
+Las capturas se guardan fuera del repositorio, en `qa-evidence/2026-10-29` de la carpeta de trabajo que contiene esta copia. Hay una carpeta por US y una carpeta `AUTH` para requisitos previos. No publicar capturas con datos de cuentas reales ni enlaces de acceso de un solo uso.
+
+- `AUTH/01-smtp-enabled.png`: SMTP personalizado habilitado y persistido tras recargar el panel.
+- `AUTH/02-account-already-confirmed.png`: la cuenta solicitada ya figuraba confirmada desde el 02/10/2026; por ello el reenvío de alta no demuestra un nuevo envío.
+- `AUTH/03-magic-link-request-200.png`: solicitud de enlace de acceso completada con HTTP 200 en Auth.
+- `AUTH/04-email-delivered-gmail.png`: llegada del correo de acceso de SIGV a la bandeja autorizada.
+- El enlace administrativo utilizó la URL de sitio Vercel configurada, no la instancia local con la rama de esta PR. No se cambiaron contraseñas, roles ni la lista de URLs permitidas para obtener una sesión local.
+- En ese primer checkpoint, los recorridos autenticados y las capturas de cada US estaban pendientes de iniciar sesión en la instancia local con una cuenta de prueba autorizada. El segundo checkpoint registra la evidencia obtenida después; crear carpetas por sí solo no equivale a aprobar recorridos.
+
+### Segundo checkpoint: cuentas ficticias y smoke autenticado
+
+Se crearon Clara Molina (administración), Bruno Arias (mostrador) y Natalia Soto (pasajero), con correos ficticios bajo `example.com`. Las contraseñas se entregan solo por el canal privado y no forman parte de este documento. Los tres accesos, sus perfiles y permisos fueron comprobados; los perfiles no administrativos no accedieron a reportes de administración. Las cuentas están confirmadas administrativamente y no necesitan recibir un enlace en esos dominios ficticios.
+
+| US | Evidencia observada en Supabase desde navegador | Carpeta local |
+| --- | --- | --- |
+| US-025 | Historial persistente y recepción en Gmail de cambio horario y cancelación. Tres eventos enviados, cero pendientes, destinatario de prueba aislado. | `US-025` |
+| US-026 | Motivo con dos líneas y `<operativa> & seguridad` recibido literalmente como texto; ningún elemento HTML inyectado. La siguiente operación comienza con motivo vacío. | `US-026` |
+| US-027 | Vuelo sintético/Economy: 2 vendidos, capacidad 10, ocupación 20%. | `US-027` |
+| US-028 | Detalle con exactamente Natalia Soto y Camilo Duarte; regreso al reporte. | `US-028` |
+| US-029 | Búsqueda y selección reales a 390 px; ancho del documento 390 px, sin desbordamiento. | `US-029` |
+| US-030 | Compra de dos pasajeros desde móvil, confirmación persistente y comprobante recibido en Gmail. | `US-030` |
+| US-033 | 10:00 → 11:00 → 11:30 sin acumular; fecha dentro de 48h rechazada; cancelación terminal sin controles operativos. | `US-033` |
+| US-034 | Tras el pago: 2 vendidos, 8 disponibles y 0 asignados de 10 cupos Economy. | `US-034` |
+| US-035 | Rechazo visible con tarjeta documentada y aprobación posterior sin cambiar los demás datos. | `US-035` |
+
+Datos retenidos para inspección: vuelos `QA-WEB-1029-A` y `QA-WEB-1029-B`; reserva `SIGV-6DECF855`. El primero terminó Cancelado y la reserva A reagendar, coherente con las opciones de la ruta. No se modificaron reservas de otros usuarios.
+
+**No marcar como probado en este recorrido:** CSV descargado (el clic no produjo un evento de descarga capturable), nueve pasajeros reales, pérdida de conexión/reconciliación real, conservación del check-in, reembolso/devolución de cupo desde navegador, concurrencia real ni recuperación SMTP desde la web. Las pruebas automatizadas/locales previas son evidencia distinta y no sustituyen estas capturas. El programador desatendido de correos sigue pendiente.
