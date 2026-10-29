@@ -62,13 +62,16 @@ const integration = { skip: !base && "Definí PASSENGER_TEST_BASE_URL para ejecu
 test("la API de demostración valida el motivo y no afirma persistencia ni entrega SMTP", integration, async () => {
   const health = await (await fetch(`${base}/api/health`)).json();
   assert.equal(health.provider, "mock", "No ejecutar estas pruebas contra un proveedor real");
-  const init = (reason) => ({ method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ flightId: "AR-1420", status: "Retrasado", reason }) });
+  const flight = (await (await fetch(`${base}/api/data/flights`)).json()).data.find((row) => row.id === "AR-1420");
+  const later = (value) => { const [hour, minute] = value.split(":").map(Number); const total = (hour * 60 + minute + 30) % 1440; return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; };
+  const init = (reason) => ({ method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ flightId: flight.id, status: "Retrasado", departure: later(flight.departure), arrival: later(flight.arrival), reason }) });
   assert.equal((await fetch(`${base}/api/data/disruptions`, init({ invalid: true }))).status, 400);
   const response = await fetch(`${base}/api/data/disruptions`, init("Cuestiones climáticas\nRevisión <operativa>"));
   assert.equal(response.status, 202);
   const result = await response.json();
   assert.equal(result.persisted, false);
   assert.ok(result.data.acceptedFields.includes("reason"));
+  assert.equal(result.data.reason, "Cuestiones climáticas\nRevisión <operativa>");
   const history = await (await fetch(`${base}/api/data/flight-mail`)).json();
   assert.deepEqual(history.data, { configured: false, items: [], attempts: [] });
 });

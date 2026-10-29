@@ -188,7 +188,8 @@ export async function PATCH(request: NextRequest, context: Context) {
       ...(typeof payload.status === "string" ? { status: payload.status } : {}) };
     const problem = flightPolicyProblem(flight, change);
     if (problem) return NextResponse.json({ error: problem }, { status: 400 });
-    return NextResponse.json({ mode: "mock", persisted: false, data: { ...flight, ...change, status: nextFlightStatus(flight, change) } }, { status: 202 });
+    return NextResponse.json({ mode: "mock", persisted: false, data: { ...flight, ...change, status: nextFlightStatus(flight, change),
+      reason: changeReason(payload.reason), acceptedFields: Object.keys(payload).filter((key) => key !== "password") } }, { status: 202 });
   }
   if (resource === "payments") {
     if (payload.action !== "refund" || !payload.reservationCode) return NextResponse.json({ error: "Reembolso simulado inválido" }, { status: 400 });
