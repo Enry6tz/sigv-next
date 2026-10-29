@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Flight } from "@/lib/mock-data";
 import { displayFlightCode } from "@/lib/flight-code";
 import { findModule } from "@/lib/catalog";
@@ -28,6 +28,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
   const [selection, setSelection] = useState<{ flight: string; cabin: Cabin } | null>(null);
   const [validation, setValidation] = useState("");
   const [editingSearch, setEditingSearch] = useState(false);
+  const travelDateInput = useRef<HTMLInputElement>(null);
   const [expandedFlight, setExpandedFlight] = useState<string | null>(null);
   const [directOnly, setDirectOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -86,7 +87,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
           <label className="passenger-origin">Origen<span className="passenger-location-field"><span aria-hidden="true">📍</span><select name="origin" value={origin} onChange={(event) => { setOrigin(event.target.value); setValidation(""); }} required>{options(origin)}</select></span></label>
           <div className="passenger-swap"><button type="button" aria-label="Intercambiar origen y destino" onClick={() => { setOrigin(destination); setDestination(origin); setValidation(""); }}>↑↓</button></div>
           <label className="passenger-destination">Destino<span className="passenger-location-field"><span aria-hidden="true">✈️</span><select name="destination" value={destination} onChange={(event) => { setDestination(event.target.value); setValidation(""); }} required>{options(destination)}</select></span></label>
-          <label>Fecha de ida<input name="date" type="date" value={travelDate} onChange={(event) => setTravelDate(event.target.value)} min={today} required /></label>
+          <label>Fecha de ida<input ref={travelDateInput} name="date" type="date" value={travelDate} onChange={(event) => setTravelDate(event.target.value)} min={today} required /></label>
           <label>Fecha de vuelta<input name="returnDate" type="date" value={returnDate} onChange={(event) => setReturnDate(event.target.value)} min={travelDate || today} required={trip === "round-trip"} disabled={trip !== "round-trip"} /></label>
           <label className="passenger-count">Pasajeros<span className="passenger-location-field"><span aria-hidden="true">👤</span><select name="passengers" value={count} onChange={(event) => setCount(Number(event.target.value))}>{Array.from({ length: 9 }, (_, index) => <option key={index} value={index + 1}>{index + 1} {index ? "pasajeros" : "pasajero"}</option>)}</select></span></label>
           <label className="passenger-cabin-preference">Clase de cabina<select name="cabin" value={preferredCabin} onChange={(event) => setPreferredCabin(event.target.value as Cabin | "")}><option value="">Cualquiera</option><option value="Economy">Economy</option><option value="Primera">Primera clase</option></select></label>
@@ -107,7 +108,7 @@ export function PassengerSearch({ initialQuery, sprint }: { initialQuery: Passen
         <div className="passenger-results-heading"><div><h2>{city(activeQuery.origin)} → {city(activeQuery.destination)}</h2><p>{new Date(`${activeQuery.date}T12:00:00`).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" })} · {passengers} {passengers === 1 ? "pasajero" : "pasajeros"}{flights && <> · <strong>{results.length} {results.length === 1 ? "vuelo encontrado" : "vuelos encontrados"}</strong></>}</p></div>
           <div className="passenger-sort" aria-label="Ordenar vuelos"><span>Ordenar por:</span>{([["price", "Precio"], ["duration", "Duración"], ["departure", "Salida"], ["arrival", "Llegada"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={sort === value} onClick={() => setSort(value)}>{label}</button>)}</div>
         </div>
-        {error ? <p role="alert" className="error-box">{error}</p> : !flights ? <p role="status" className="passenger-empty">Cargando vuelos…</p> : !results.length ? <div className="passenger-empty" role="status"><span aria-hidden="true">✈️</span><p>No hay vuelos disponibles para esa ruta, fecha y cantidad de pasajeros. Probá con otra búsqueda.</p></div> : <>
+        {error ? <p role="alert" className="error-box">{error}</p> : !flights ? <p role="status" className="passenger-empty">Cargando vuelos…</p> : !results.length ? <div className="passenger-empty" role="status"><span aria-hidden="true">✈️</span><p>No hay vuelos disponibles para esa ruta, fecha y cantidad de pasajeros. Prueba con fechas cercanas.</p><button className="button small" type="button" onClick={() => { setEditingSearch(true); window.requestAnimationFrame(() => travelDateInput.current?.focus()); }}>Elegir fechas cercanas</button></div> : <>
           <div className="passenger-flight-columns" aria-hidden="true"><span>Vuelo</span><span>Escalas</span><span>Duración</span><span>Economy</span><span>Primera clase</span><span /></div>
           <div className="passenger-flight-list">{results.map((flight, index) => {
             const selected = selection?.flight === flight.id;

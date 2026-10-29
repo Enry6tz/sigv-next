@@ -7,8 +7,9 @@ import { findModule, resourceSprint, type Module } from "@/lib/catalog";
 import { PassengerBooking, type BookingQuery } from "./passenger-booking";
 import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
+import { OccupancyReport } from "./occupancy-report";
 import { ActionNotice, type Notice } from "./action-notice";
-import { mutate } from "@/lib/mutations";
+import { mutate, reconcilePayment } from "@/lib/mutations";
 import { boardingPassPayload, qrMatrix } from "@/lib/boarding-pass";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
@@ -30,15 +31,6 @@ import {
 const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(value);
 // Fechas de vuelo YYYY-MM-DD sin pasar por Date, que las corre un día según la zona horaria.
 const displayDate = (value?: string | null) => value ? value.split("-").reverse().join("/") : "—";
-
-function downloadFile(filename: string, contents: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([contents], { type: mime }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 function useMock<T>(resource: string) {
   const [data, setData] = useState<T | null>(null);
@@ -64,6 +56,7 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
   const [message, setMessage] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [paid, setPaid] = useState(false);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState<string | null>(null);
   const [cardNumber, setCardNumber] = useState("");
@@ -95,6 +88,18 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
     event.preventDefault();
     if (busy || paid) return;
 
+    if (outcomeUnknown) {
+      setBusy(true);
+      const state = await reconcilePayment([reservationCode, ...(returnReservation ? [returnReservation] : [])]);
+      setBusy(false);
+      if (state === "confirmed") { finishPayment(); return; }
+      if (state !== "pending") {
+        setMessage({ ok: false, text: "No pudimos verificar el estado del pago. Revisa tu conexión y consulta Mis reservas antes de volver a pagar." });
+        return;
+      }
+      setOutcomeUnknown(false);
+    }
+
     const problems = {
       cardNumber: cardNumberProblem(cardNumber),
       cardHolder: cardHolderProblem(cardHolder),
@@ -120,26 +125,31 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
     data.cardExpiry = cardExpiry;
     data.cardCvv = normalizeCardCvv(cardCvv);
 
-    const result = await mutate("payments", "POST", data);
+    const result = await mutate("payments", "POST", data, { timeoutMs: 15000 });
     setBusy(false);
 
     if (result.ok) {
-      setPaid(true);
-      setConfirmed(true);
       setReceiptEmail(typeof result.data?.receiptEmail === "string" ? result.data.receiptEmail : null);
-      const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
-      router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
+      finishPayment();
     } else {
-      setMessage({ ok: false, text: result.error });
+      setOutcomeUnknown(Boolean(result.uncertain));
+      setMessage({ ok: false, text: result.uncertain ? "Se interrumpió la conexión y el resultado del pago no está confirmado. Revisa tu conexión; antes de reintentar verificaremos la reserva." : result.error });
     }
+  }
+
+  function finishPayment() {
+    setPaid(true); setConfirmed(true); setOutcomeUnknown(false);
+    const confirmationQuery = new URLSearchParams({ reservation: reservationCode, ...(returnReservation ? { returnReservation } : {}) });
+    router.push(`/pasajero/pago?${confirmationQuery.toString()}&confirmed=1`);
   }
 
   if (confirmed) {
     return (
-      <div className="two-column">
+      <div className="two-column payment-flow">
         <section className="panel">
           <p className="kicker">PASO 2 DE 2</p>
-          <h2>¡Reserva Confirmada!</h2>
+          <h2>Resumen de Reserva</h2>
+          <p role="status"><strong>¡Reserva Confirmada!</strong></p>
           <p>Tu pasaje fue emitido exitosamente.</p>
           <div className="record-grid">
             <div><strong>Número de Reserva</strong><span>{reservationCode}</span></div>
@@ -163,7 +173,7 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
   }
 
   return (
-    <div className="two-column">
+    <div className="two-column payment-flow">
       <section className="panel">
         <p className="kicker">PASO 2 DE 2</p>
         <h2>Datos de Pago</h2>
@@ -208,9 +218,10 @@ function Payment({ reservationCode, returnReservation }: { reservationCode: stri
             <p>Aprobación: <code>4111 1111 1111 1111</code>. Rechazo garantizado: <code>{groupCardNumber(DECLINED_TEST_CARD)}</code>.</p>
             <p>Completá un titular de prueba, vencimiento futuro y CVV de 3 dígitos. Un rechazo no confirma la reserva ni genera comprobantes.</p>
           </div>
-          <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : "Confirmar y Pagar"}</button>
+          <button className="button dark" disabled={busy || paid}>{busy ? "Procesando…" : outcomeUnknown ? "Verificar estado y reintentar" : "Confirmar y Pagar"}</button>
         </form>
         {message && <ActionNotice notice={message} />}
+        {outcomeUnknown && <Link className="inline-action" href="/pasajero/mis-reservas">Consultar Mis reservas</Link>}
       </section>
       <aside className="panel summary-panel">
         <h2>Resumen de compra</h2>
@@ -1003,14 +1014,7 @@ function Tickets() {
 }
 
 function Reports({ live }: { live: boolean }) {
-  const { data, error } = useMock<{ flightId: string; cabin: string; occupancy: number }[]>("reports");
-  function exportCsv() {
-    if (!data) return;
-    const cell = (value: string) => `"${(/^[=+@-]/.test(value) ? "'" : "") + value.replaceAll('"', '""')}\"`;
-    const csv = "Vuelo,Clase,Ocupación (%)\r\n" + data.map((row) => [cell(row.flightId), cell(row.cabin), row.occupancy].join(",")).join("\r\n");
-    downloadFile("SIGV-ocupacion.csv", `\uFEFF${csv}`, "text/csv;charset=utf-8");
-  }
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">OCUPACIÓN DE VUELOS</p><h2>Asientos vendidos por clase</h2></div><span className="subtle-count">{live ? "Datos en línea" : "Cifras de prueba"}</span></div>{error ? <p role="alert" className="error-text">{error}</p> : !data ? <p role="status">Cargando reporte…</p> : <><div className="action-row">{live ? <Link className="button small" href="/api/reports/occupancy/download" download prefetch={false}>Descargar CSV</Link> : <button className="button small" type="button" onClick={exportCsv}>Descargar CSV de prueba</button>}</div><div className="report-list">{data.map((row) => <div className="report-row" key={`${row.flightId}-${row.cabin}`}><div><strong>{row.flightId}</strong><span>{row.cabin}</span></div><div className="report-bar" aria-label={`${row.occupancy}% de ocupación`}><span style={{ width: `${row.occupancy}%` }} /></div><strong>{row.occupancy}%</strong></div>)}</div></>}{!live && <p className="form-hint">Cifras simuladas para revisar el formato del reporte.</p>}</section>;
+  return <OccupancyReport live={live} />;
 }
 
 function Dashboard({ module, sprint, live }: { module: Module; sprint: number; live: boolean }) {

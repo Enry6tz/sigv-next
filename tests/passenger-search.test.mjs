@@ -1,8 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mutate, reconcilePayment } from "../src/lib/mutations.ts";
 import { durationMinutes, stopsLabel, searchFlights, bookingHref, parsePassengerCount, validReturnFlight, fareAvailable, cabinAvailable } from "../src/lib/passenger-search.ts";
 
 const flight = { id: "AR-1420", origin: "EZE", destination: "BRC", date: "2026-10-14", departure: "23:30", arrival: "01:15", economy: 100, first: 250, seatsEconomy: 5, seatsFirst: 1, status: "Activo" };
+
+test("el pago con timeout libera la petición e informa resultado incierto", async (t) => {
+  t.mock.method(globalThis, "fetch", (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))));
+  const result = await mutate("payments", "POST", { reservationCode: "R1" }, { timeoutMs: 1 });
+  assert.equal(result.ok, false);
+  assert.equal(result.uncertain, true);
+  assert.match(result.error, /conexión/);
+});
+
+test("reconciliar todos los tramos distingue confirmado, pendiente e incierto sin volver a pagar", async (t) => {
+  let rows = [{ code: "R1", status: "Confirmada" }, { code: "R2", status: "Confirmada" }];
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls.push({ url, options });
+    return Response.json({ data: rows });
+  });
+  assert.equal(await reconcilePayment(["R1", "R2"]), "confirmed");
+  rows = rows.map((row) => ({ ...row, status: "Pendiente de pago" }));
+  assert.equal(await reconcilePayment(["R1", "R2"]), "pending");
+  rows.pop();
+  assert.equal(await reconcilePayment(["R1", "R2"]), "unknown");
+  assert.equal(await reconcilePayment([]), "unknown");
+  assert.ok(calls.every((call) => call.url === "/api/data/reservations" && !call.options.method));
+});
+
+test("mutaciones existentes conservan payload, respuesta y ausencia de timeout por defecto", async (t) => {
+  let request;
+  t.mock.method(globalThis, "fetch", async (url, options) => { request = { url, options }; return Response.json({ data: { accepted: true } }); });
+  assert.deepEqual(await mutate("profile", "PATCH", { name: "Prueba" }), { ok: true, data: { accepted: true }, error: "" });
+  assert.equal(request.url, "/api/data/profile");
+  assert.equal(request.options.body, '{"name":"Prueba"}');
+  assert.equal(request.options.signal, undefined);
+});
 
 test("calcula duración de vuelos nocturnos y respeta la duración informada", () => {
   assert.equal(durationMinutes(flight), 105);

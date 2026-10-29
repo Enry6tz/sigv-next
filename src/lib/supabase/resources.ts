@@ -14,6 +14,7 @@ import { appTimeZone } from "@/lib/sprint";
 import { boardingPassCode } from "@/lib/boarding-pass";
 import { loadReceipts, scheduleReceiptEmail, sendReceiptEmail } from "@/lib/receipts";
 import { flightStatus } from "@/lib/flight-policy";
+import { buildOccupancyReport, type ReportFlight } from "@/lib/occupancy-report";
 export { ApiError } from "@/lib/api-errors";
 
 type Client = SupabaseClient;
@@ -280,11 +281,21 @@ export async function readResource(resource: string, filters: URLSearchParams) {
   }
   if (resource === "reports") {
     await requireRole(client, ["admin"]);
-    const rows = unwrap(await client.from("flights").select("id,seats_economy,seats_first,capacity_economy,capacity_first"));
-    return rows.flatMap((row: Json) => [
-      { flightId: row.id, cabin: "Economy", occupancy: Number(row.capacity_economy) ? Math.round((1 - Number(row.seats_economy) / Number(row.capacity_economy)) * 100) : 0 },
-      { flightId: row.id, cabin: "Primera", occupancy: Number(row.capacity_first) ? Math.round((1 - Number(row.seats_first) / Number(row.capacity_first)) * 100) : 0 },
-    ]);
+    const reportFlights: ReportFlight[] = [];
+    const reportReservations = [];
+    // Paginar evita totales silenciosamente truncados por el límite de la Data API.
+    for (let offset = 0; ; offset += 1000) {
+      const rows = unwrap(await client.from("flights").select("id,flight_date,capacity_economy,capacity_first").order("id").range(offset, offset + 999));
+      reportFlights.push(...rows.map((row: Json) => ({ id: String(row.id), date: String(row.flight_date), capacityEconomy: Number(row.capacity_economy), capacityFirst: Number(row.capacity_first) })));
+      if (rows.length < 1000) break;
+    }
+    for (let offset = 0; ; offset += 1000) {
+      const rows = unwrap(await client.from("reservations").select("code,flight_id,cabin,status,reservation_passengers(first_name,last_name,document)").eq("status", "Confirmada").order("id").range(offset, offset + 999));
+      reportReservations.push(...rows.map((row) => ({ code: String(row.code), flightId: String(row.flight_id), cabin: String(row.cabin), status: String(row.status), passengers: row.reservation_passengers })));
+      if (rows.length < 1000) break;
+    }
+    try { return buildOccupancyReport(reportFlights, reportReservations, filters); }
+    catch (error) { throw new ApiError(error instanceof Error ? error.message : "Filtros inválidos"); }
   }
   throw new ApiError("Recurso desconocido", 404);
 }

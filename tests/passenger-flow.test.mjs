@@ -10,6 +10,36 @@ async function post(resource, payload) {
 const people = [{ firstName: "Prueba", lastName: "Uno", document: "30111222" }, { firstName: "Prueba", lastName: "Dos", document: "30111223" }];
 const contact = { contactEmail: "qa@test.example", contactPhone: "+54 9 11 5555 5555" };
 
+test("reportes filtran confirmados y entregan un detalle consistente sin perder filas sin ventas", integration, async () => {
+  const health = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(health.provider, "mock", "No ejecutar estas pruebas sobre datos reales");
+  if (health.sprint < 3) return;
+  const allResponse = await fetch(`${base}/api/data/reports`);
+  assert.equal(allResponse.status, 200);
+  const all = (await allResponse.json()).data;
+  const row = all.find((entry) => entry.flightId === "AR-1420" && entry.cabin === "Economy");
+  assert.equal(row.sold, 2);
+  assert.equal(row.passengers.length, 2);
+  assert.ok(all.some((entry) => entry.sold === 0));
+  const query = new URLSearchParams({ flightId: row.flightId, cabin: row.cabin, from: row.date, to: row.date });
+  const filtered = (await (await fetch(`${base}/api/data/reports?${query}`)).json()).data;
+  assert.deepEqual(filtered, [row]);
+  assert.equal((await fetch(`${base}/api/data/reports?from=2026-12-02&to=2026-12-01`)).status, 400);
+  assert.deepEqual((await (await fetch(`${base}/api/data/reports?from=2099-01-01`)).json()).data, []);
+});
+
+test("la compra web admite nueve pasajeros y mantiene sus datos hasta el pago simulado", integration, async () => {
+  const health = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(health.provider, "mock", "Solo genera reservas simuladas");
+  const passengers = Array.from({ length: 9 }, (_, index) => ({ firstName: `Prueba ${index}`, lastName: "Grupo", document: String(30111300 + index) }));
+  const booking = await post("reservations", { flightId: "AR-1420", cabin: "Economy", passengerCount: 9, passengers, ...contact });
+  assert.equal(booking.status, 202);
+  assert.equal(booking.body.data.seats, 9);
+  const payment = await post("payments", { reservationCode: booking.body.data.code, method: "Tarjeta de prueba" });
+  assert.equal(payment.status, 202);
+  assert.equal(payment.body.data.status, "Aprobado (simulado)");
+});
+
 test("el flujo de compra abre sus pantallas y recursos desde Sprint 1", integration, async () => {
   const health = await (await fetch(`${base}/api/health`)).json();
   assert.equal(health.provider, "mock", "No ejecutar esta prueba contra datos reales");

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { airports, flights, mockCollections, reservation } from "@/lib/mock-data";
+import { airports, flights, mockCollections, reservation, mockReportFlights, mockReportReservations } from "@/lib/mock-data";
+import { buildOccupancyReport } from "@/lib/occupancy-report";
 import { resourceSprint } from "@/lib/catalog";
 import { appSprint, dataProvider } from "@/lib/sprint";
 import { ApiError, readResource, writeResource } from "@/lib/supabase/resources";
@@ -71,6 +72,10 @@ export async function GET(request: NextRequest, context: Context) {
     );
   }
   if (resource === "airports") data = airports;
+  if (resource === "reports") {
+    try { data = buildOccupancyReport(mockReportFlights, mockReportReservations, request.nextUrl.searchParams); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Filtros inválidos" }, { status: 400 }); }
+  }
   return NextResponse.json({ mode: "mock", sprint: appSprint, resource, data }, { headers: { "Cache-Control": "no-store" } });
 }
 
