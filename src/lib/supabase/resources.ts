@@ -285,8 +285,12 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     const reportReservations = [];
     // Paginar evita totales silenciosamente truncados por el límite de la Data API.
     for (let offset = 0; ; offset += 1000) {
-      const rows = unwrap(await client.from("flights").select("id,flight_date,capacity_economy,capacity_first").order("id").range(offset, offset + 999));
-      reportFlights.push(...rows.map((row: Json) => ({ id: String(row.id), date: String(row.flight_date), capacityEconomy: Number(row.capacity_economy), capacityFirst: Number(row.capacity_first) })));
+      const rows = unwrap(await client.from("flights").select("id,schedule_id,flight_date,capacity_economy,capacity_first").is("archived_at", null).order("id").range(offset, offset + 999));
+      reportFlights.push(...rows.map((row: Json) => {
+        const id = String(row.id);
+        const scheduleId = typeof row.schedule_id === "string" ? row.schedule_id : null;
+        return { id, code: displayFlightCode({ id, scheduleId }), scheduleId, date: String(row.flight_date), capacityEconomy: Number(row.capacity_economy), capacityFirst: Number(row.capacity_first) };
+      }));
       if (rows.length < 1000) break;
     }
     for (let offset = 0; ; offset += 1000) {

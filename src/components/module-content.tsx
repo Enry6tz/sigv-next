@@ -589,18 +589,18 @@ const disruptionLimit = 60;
 
 function changeTitle({ row, status, date, departure, arrival }: FlightChange) {
   const flight = `${row.code ?? row.flightId}${row.date ? ` del ${displayDate(row.date)}` : ""}`;
-  if (date) return `¿Reprogramar el vuelo ${flight} al ${displayDate(date)}, ${departure} → ${arrival}?`;
+  if (date && date !== row.date) return `¿Reprogramar el vuelo ${flight} al ${displayDate(date)}, ${departure} → ${arrival}?`;
   if (status === "Cancelado") return `¿Cancelar el vuelo ${flight}?`;
-  if (status === "Retrasado") return `¿Marcar el vuelo ${flight} como retrasado?`;
-  return `¿Volver a activo el vuelo ${flight}?`;
+  if (status === "Retrasado") return `¿Marcar el vuelo ${flight} como retrasado${departure ? ` (${departure} → ${arrival})` : ""}?`;
+  return `¿Volver a activo el vuelo ${flight}${departure ? ` (${departure} → ${arrival})` : ""}?`;
 }
 
 function changeEffect({ row, status, date }: FlightChange) {
   const bookings = `${row.affectedBookings} reserva${row.affectedBookings !== 1 ? "s" : ""}`;
   if (status === "Cancelado") return `Afecta a ${bookings}. Cada reserva confirmada pasa a 'A reagendar' si la ruta tiene otro vuelo con lugar en su clase, o a 'A reembolsar' si no lo tiene; las pendientes de pago se cancelan. Los pasajeros reciben un aviso con sus opciones.`;
-  if (date) return `Afecta a ${bookings}. Conservan sus asientos en el nuevo horario; cada pasajero recibe un aviso y puede cancelar desde Mis reservas si no acepta el cambio, liberando sus asientos.`;
-  if (status === "Retrasado") return `Se avisará la demora a los pasajeros de ${bookings}.`;
-  return `Se avisará a los pasajeros de ${bookings} que el vuelo vuelve a operar normalmente.`;
+  if (date && date !== row.date) return `Afecta a ${bookings}. Conservan sus asientos en el nuevo horario; cada pasajero recibe un aviso y puede cancelar desde Mis reservas si no acepta el cambio, liberando sus asientos.`;
+  if (status === "Retrasado") return `Se avisará la demora a los pasajeros de ${bookings}. Las reservas conservan su asiento y su check-in.`;
+  return `Se avisará a los pasajeros de ${bookings} que el vuelo vuelve a operar normalmente. Las reservas conservan su asiento y su check-in.`;
 }
 
 type FlightMailHistoryData = {
@@ -703,8 +703,9 @@ function Disruptions() {
   function reschedule(event: FormEvent<HTMLFormElement>, row: DisruptionRow) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const nextDate = String(form.get("date"));
     const departure = String(form.get("departure"));
-    setPending({ row, status: departure > (row.scheduledDeparture ?? row.departure ?? "") ? "Retrasado" : "Activo", date: String(form.get("date")), departure, arrival: String(form.get("arrival")) });
+    setPending({ row, status: departure > (row.scheduledDeparture ?? row.departure ?? "") ? "Retrasado" : "Activo", ...(nextDate !== row.date ? { date: nextDate } : {}), departure, arrival: String(form.get("arrival")) });
     setRescheduling(null);
   }
 
@@ -867,11 +868,11 @@ type InventoryRow = { flightId: string; date: string; capacityEconomy: number; c
   assignedEconomy: number; assignedFirst: number };
 
 function InventorySummary() {
-  const { data, error } = useMock<InventoryRow[]>("inventory");
+  const { data, error, refresh } = useMock<InventoryRow[]>("inventory");
   const [flightId, setFlightId] = useState("");
   const selected = (data ?? []).filter((row) => !flightId || row.flightId === flightId).slice(0, 60);
   return <section className="panel inventory-summary" aria-label="Cupos vendidos por vuelo y clase">
-    <div className="panel-title"><h2>Cupos vendidos y asientos asignados</h2></div>
+    <div className="panel-title"><h2>Cupos vendidos y asientos asignados</h2><button className="button small" type="button" onClick={refresh}>Actualizar</button></div>
     <p className="form-hint">Una venta ocupa cupo comercial. El asiento físico se asigna al hacer check-in; no son el mismo contador.</p>
     <label>Vuelo<select value={flightId} onChange={(event) => setFlightId(event.target.value)}><option value="">Todos los vuelos</option>{data?.map((row) => <option key={row.flightId} value={row.flightId}>{row.flightId} · {displayDate(row.date)}</option>)}</select></label>
     {error && <p role="alert" className="error-text">{error}</p>}
@@ -1032,7 +1033,7 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.slug === "pago") return <Payment reservationCode={initialQuery.reservation} returnReservation={initialQuery.returnReservation} />;
   if (module.slug === "mis-reservas") return <Reservations live={live} />;
   if (module.slug === "perfil") return <Profile live={live} />;
-  if (module.slug === "check-in") return <CheckIn live={live} />;
+  if (module.slug === "check-in") return <><InventorySummary /><CheckIn live={live} /></>;
   if (module.slug === "manifiesto") return <><InventorySummary /><Manifest /></>;
   if (module.slug === "boarding-pass") return <BoardingPass />;
   if (module.slug === "facturas") return <Comprobantes canEmail={sprint >= resourceSprint.receipts} />;
