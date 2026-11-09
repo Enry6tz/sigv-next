@@ -49,3 +49,25 @@ test("cada detalle tiene exactamente los pasajes vendidos y exportar respeta las
   assert.doesNotMatch(occupancyCsv(rows), /F2|30111222/);
   assert.match(occupancyCsv([{ ...rows[0], flightId: '=HYPERLINK("x")' }]), /'=HYPERLINK/);
 });
+
+test("vuelos generados por programación usan su código comercial y permiten filtrar varias fechas", () => {
+  const scheduledFlights = [
+    { id: "AR-1420", date: "2026-11-08", capacityEconomy: 100, capacityFirst: 10 },
+    { id: "AR-1420-20261110", scheduleId: "sched-1", date: "2026-11-10", capacityEconomy: 100, capacityFirst: 10 },
+    { id: "AR-1420-20261112", scheduleId: "sched-1", date: "2026-11-12", capacityEconomy: 100, capacityFirst: 10 },
+  ];
+  const scheduledReservations = [
+    { code: "R-08", flightId: "AR-1420", cabin: "Economy", status: "Confirmada", passengers: [person("Sol", "30111221")] },
+    { code: "R-10", flightId: "AR-1420-20261110", cabin: "Economy", status: "Confirmada", passengers: [person("Ana", "30111222")] },
+    { code: "R-12", flightId: "AR-1420-20261112", cabin: "Economy", status: "Confirmada", passengers: [person("Luis", "30111223"), person("Eva", "30111224")] },
+  ];
+  const rows = buildOccupancyReport(scheduledFlights, scheduledReservations, new URLSearchParams({ flightId: "AR-1420", cabin: "Economy", from: "2026-11-10", to: "2026-11-12" }));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].flightId, "AR-1420");
+  assert.equal(rows[0].date, "2026-11-10");
+  assert.equal(rows[0].sold, 1);
+  assert.equal(rows[1].flightId, "AR-1420");
+  assert.equal(rows[1].date, "2026-11-12");
+  assert.equal(rows[1].sold, 2);
+  assert.deepEqual(reportTotals(rows), { sold: 3, flights: 2, capacity: 200, average: 1.5, weightedOccupancy: 1.5 });
+});
