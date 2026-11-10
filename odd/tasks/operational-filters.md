@@ -12,11 +12,11 @@ Branch: `feat/operational-filters` from `71bef0b`. Delivery: local reviewable co
 
 ## Tasks
 
-- T1 — S1 — inline, shared control and behavioral predicates — pending.
-- T2 — S1/S2 — delegated writer, existing operational workspace module and its tests — pending.
-- T3 — S1/S3 — delegated writer, domain manager and occupancy report with their tests — pending.
-- T4 — S4 — inline integrator, root cause and opt-in flight list regression — pending.
-- T5 — S5 — delegated tester plus integration checks; publication separate — pending.
+- T1 — S1 — inline, shared control and behavioral predicates — implementation and focused checks complete, `4d7b29b`.
+- T2 — S1/S2 — delegated writer, existing operational workspace module and its tests — implementation and focused checks complete, `b43cdc8`.
+- T3 — S1/S3 — delegated writer, domain manager and occupancy report with their tests — implementation and focused checks complete, `f4ea0d9`.
+- T4 — S4 — inline integrator, root cause and opt-in flight list regression — implementation and focused checks complete, `c4d28b4`.
+- T5 — S5 — delegated tester plus integration checks — verified on `c4d28b4`; remote publication awaits Git session authorization.
 
 ## Log
 
@@ -53,3 +53,11 @@ https://sigv-next-hgl8.vercel.app/admin/vuelos Hacelo con dos implementadores, d
 ### L2 — Baseline
 
 The deployed public flights API returned the seeded standalone codes on matching dates. The local admin list reads only `flight_schedules`; its page size is seven. These are separate mechanisms. The Engram mirror is pending because the runtime has no registered memory identity.
+
+### L3 — Integration
+
+The two writers completed disjoint operational and domain surfaces. The admin list retains the existing schedule actions and opts into standalone flights through the already-authenticated resource. Local Sprint 3 mock GET returns no standalone rows with the default URL and one with the opt-in parameter. The focused admin and shared predicate tests passed 7/7; the two writer test batches passed 3/3 and 10/10, and integrated typecheck passed. Five missing dependency versions and their locked local dependencies were restored from the sibling checkout without changing package metadata or using remote credentials.
+
+### L4 — Independent verification
+
+The tester recorded 104/104 automated tests with the local Sprint 3 server, 17/17 Playwright scenario groups at desktop and mobile widths, clean ESLint, and a successful production build in mock mode. Browser-only GET fixtures supplied the resources absent from the built-in mock and the 15-row pagination case. No live seat changes or authenticated remote checks were run. The public deployed API confirmed all seven seeded flight IDs, including ones moved or canceled after insertion. The Impeccable detector returned no findings and the parent spot check passed 15/15 focused tests. Receipt-driven review is off by global preference. No remote publication or database change was made.
