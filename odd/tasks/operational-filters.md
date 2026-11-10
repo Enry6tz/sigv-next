@@ -1,6 +1,6 @@
 # Operational workspace filters
 Objective: improve filtering in the existing SIGV workspace and make individually created flights discoverable in Admin Flights.
-Branch: `feat/operational-filters` from `71bef0b`. Delivery: local reviewable commits, then explicit authorization for direct `main` delivery. Runner: `npm test`, lint, typecheck and isolated Sprint 3 browser checks.
+Branch: `feat/operational-filters` from `71bef0b`. Delivery: `exception-ok`, a single PR against `main`; no direct push to `main`. Runner: `npm test`, lint, typecheck and isolated Sprint 3 browser checks.
 
 ## Specs
 
@@ -16,7 +16,7 @@ Branch: `feat/operational-filters` from `71bef0b`. Delivery: local reviewable co
 - T2 — S1/S2 — delegated writer, existing operational workspace module and its tests — implementation and focused checks complete, `b43cdc8`.
 - T3 — S1/S3 — delegated writer, domain manager and occupancy report with their tests — implementation and focused checks complete, `f4ea0d9`.
 - T4 — S4 — inline integrator, root cause and opt-in flight list regression — implementation and focused checks complete, `c4d28b4`.
-- T5 — S5 — delegated tester plus integration checks — verified on `c4d28b4`; remote publication awaits Git session authorization.
+- T5 — S5 — delegated tester plus integration checks — verified on `c4d28b4`; single PR authorized.
 
 ## Log
 
@@ -61,3 +61,7 @@ The two writers completed disjoint operational and domain surfaces. The admin li
 ### L4 — Independent verification
 
 The tester recorded 104/104 automated tests with the local Sprint 3 server, 17/17 Playwright scenario groups at desktop and mobile widths, clean ESLint, and a successful production build in mock mode. Browser-only GET fixtures supplied the resources absent from the built-in mock and the 15-row pagination case. No live seat changes or authenticated remote checks were run. The public deployed API confirmed all seven seeded flight IDs, including ones moved or canceled after insertion. The Impeccable detector returned no findings and the parent spot check passed 15/15 focused tests. Receipt-driven review is off by global preference. No remote publication or database change was made.
+
+### L5 — Pull request delivery
+
+The requester confirmed the size exception for one PR, `main <- feat/operational-filters`. The slice includes all five existing work-unit and verification commits from `71bef0b` through `454c543`, plus this delivery record.
