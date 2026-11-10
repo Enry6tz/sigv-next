@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { buildOccupancyReport, occupancyCsv, reportTotals, type OccupancyRow } from "@/lib/occupancy-report";
+import { FilterBar, FilterInput, SearchSelect } from "./workspace-filters";
 
 const emptyFilters = { flightId: "", cabin: "", from: "", to: "" };
+const cabinOptions = [{ value: "", label: "Todas las clases" }, { value: "Economy", label: "Economy" }, { value: "Primera", label: "Primera" }];
 const dateLabel = (value: string) => value.split("-").reverse().join("/");
 
 export function OccupancyReport({ live }: { live: boolean }) {
@@ -50,6 +52,10 @@ export function OccupancyReport({ live }: { live: boolean }) {
     setDraft(emptyFilters); setSelected(null); setRows(null); setError(""); setQuery(""); setRevision((value) => value + 1);
   }
 
+  function changeFilter(key: keyof typeof emptyFilters, value: string) {
+    setDraft((previous) => ({ ...previous, [key]: value }));
+  }
+
   function closeDetail() {
     setSelected(null);
     detailTrigger.current?.focus();
@@ -66,12 +72,16 @@ export function OccupancyReport({ live }: { live: boolean }) {
   const totals = reportTotals(rows ?? []);
   return <section className="panel occupancy-report" aria-labelledby="occupancy-heading">
     <div className="panel-title"><h2 id="occupancy-heading">Reporte de ocupación</h2><span className="subtle-count">{live ? "Datos en línea" : "Datos simulados"}</span></div>
-    <form className="occupancy-filters" onSubmit={apply}>
-      <label>Vuelo<select value={draft.flightId} onChange={(event) => setDraft({ ...draft, flightId: event.target.value })}><option value="">Todos los vuelos</option>{flightOptions.map((id) => <option key={id}>{id}</option>)}</select></label>
-      <label>Clase<select value={draft.cabin} onChange={(event) => setDraft({ ...draft, cabin: event.target.value })}><option value="">Todas las clases</option><option>Economy</option><option>Primera</option></select></label>
-      <label>Desde<input type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} /></label>
-      <label>Hasta<input type="date" value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })} /></label>
-      <div className="action-row"><button className="button dark" type="submit">Aplicar</button><button className="button" type="button" onClick={clear}>Limpiar</button></div>
+    <form onSubmit={apply}>
+      <FilterBar label="Filtros del reporte">
+        <SearchSelect label="Vuelo" value={draft.flightId} onChange={(value) => changeFilter("flightId", value)}
+          options={[{ value: "", label: "Todos los vuelos" }, ...flightOptions.map((id) => ({ value: id, label: id }))]} />
+        <SearchSelect label="Clase" value={draft.cabin} onChange={(value) => changeFilter("cabin", value)} options={cabinOptions} />
+        <FilterInput label="Desde" type="date" value={draft.from} onChange={(value) => changeFilter("from", value)} />
+        <FilterInput label="Hasta" type="date" value={draft.to} onChange={(value) => changeFilter("to", value)} />
+        <button className="button dark" type="submit">Aplicar</button>
+        <button className="button" type="button" onClick={clear}>Limpiar</button>
+      </FilterBar>
     </form>
     {error ? <p role="alert" className="error-text">{error}</p> : !rows ? <p role="status">Cargando reporte…</p> : !rows.length ? <p role="status" className="empty-inline">No existen vuelos que coincidan con los filtros. Prueba con otras fechas o limpia la búsqueda.</p> : <>
       <dl className="occupancy-totals" aria-label="Totales del resultado filtrado"><div><dt>Pasajes vendidos</dt><dd>{totals.sold}</dd></div><div><dt>Vuelos incluidos</dt><dd>{totals.flights}</dd></div><div><dt>Ocupación promedio</dt><dd>{totals.average}%</dd></div></dl>
