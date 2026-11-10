@@ -9,8 +9,11 @@ import { DomainManager } from "./domain-manager";
 import { AdminFlights } from "./admin-flights";
 import { OccupancyReport } from "./occupancy-report";
 import { ActionNotice, type Notice } from "./action-notice";
+import { FilterBar, FilterInput, SearchSelect } from "./workspace-filters";
 import { mutate, reconcilePayment } from "@/lib/mutations";
 import { boardingPassPayload, qrMatrix } from "@/lib/boarding-pass";
+import { matchesDateRange, matchesFilter, uniqueOptions } from "@/lib/filter-options";
+import { auditCalendarDate, keepVisibleSelection, readyBoardingPasses } from "@/lib/operational-filters";
 import { createClient } from "@/lib/supabase/client";
 import { mapAuthError } from "@/lib/auth-errors";
 import { DECLINED_TEST_CARD } from "@/lib/payment-simulation";
@@ -32,11 +35,12 @@ const money = (value: number) => new Intl.NumberFormat("es-AR", { style: "curren
 // Fechas de vuelo YYYY-MM-DD sin pasar por Date, que las corre un día según la zona horaria.
 const displayDate = (value?: string | null) => value ? value.split("-").reverse().join("/") : "—";
 
-function useMock<T>(resource: string) {
+function useMock<T>(resource: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   useEffect(() => {
+    if (resource === null) return;
     let active = true;
     fetch(`/api/data/${resource}`, { cache: "no-store" }).then(async (response) => {
       const result = await response.json();
@@ -246,10 +250,11 @@ function CheckIn({ live }: { live: boolean }) {
   const [document, setDocument] = useState("");
 
   async function lookupReservation() {
-    if (!reservationCode || !document) return;
+    const code = reservationCode.trim().toUpperCase();
+    const passengerDocument = document.trim();
+    if (!code || !passengerDocument) return;
     setBusy(true); setMessage(null); setReservation(null); setSeats(null); setSelectedSeat(null);
     try {
-      const code = reservationCode.trim().toUpperCase();
       // La reserva se busca primero para explicar por qué no admite check-in (criterio 5).
       const resResponse = await fetch("/api/data/reservations", { cache: "no-store" });
       if (!resResponse.ok) throw new Error("No se pudo obtener el detalle de la reserva.");
@@ -267,7 +272,7 @@ function CheckIn({ live }: { live: boolean }) {
       if (!response.ok) throw new Error("No se pudo buscar la reserva.");
       const body = await response.json();
       const rows = (body.data ?? []) as ManifestRow[];
-      const row = rows.find((r) => r.reservationCode === code && r.document === document.trim());
+      const row = rows.find((r) => r.reservationCode === code && r.document === passengerDocument);
       if (!row) throw new Error("El documento no corresponde a un pasajero de esta reserva.");
       if (row.checkedIn) throw new Error("El pasajero ya tiene check-in.");
 
@@ -321,9 +326,10 @@ function CheckIn({ live }: { live: boolean }) {
         <h2>Registrar check-in</h2>
         {!reservation ? (
           <form className="stack-form" onSubmit={(e) => { e.preventDefault(); lookupReservation(); }}>
-            <label>Código de reserva<input name="reservationCode" value={reservationCode} onChange={(e) => setReservationCode(e.target.value)} placeholder="SIGV-..." required /></label>
-            {live && <label>Documento del pasajero<input name="document" value={document} onChange={(e) => setDocument(e.target.value)} placeholder="DNI del pasajero" required /></label>}
-            <button className="button dark" disabled={busy || !reservationCode || !document}>{busy ? "Buscando…" : "Buscar reserva"}</button>
+            <p className="form-hint">Ingresá el código de la reserva confirmada y el DNI del pasajero.</p>
+            <label>Código de reserva<input name="reservationCode" value={reservationCode} onChange={(e) => setReservationCode(e.target.value)} placeholder="SIGV-..." autoComplete="off" spellCheck={false} required /></label>
+            <label>Documento del pasajero<input name="document" value={document} onChange={(e) => setDocument(e.target.value)} placeholder="DNI del pasajero" inputMode="numeric" autoComplete="off" required /></label>
+            <button className="button dark" disabled={busy || !reservationCode.trim() || !document.trim()}>{busy ? "Buscando…" : "Buscar reserva"}</button>
           </form>
         ) : (
           <>
@@ -380,15 +386,19 @@ function CheckIn({ live }: { live: boolean }) {
 }
 
 type ManifestRow = { id?: string; reservationCode: string; flightId: string; passenger: string; document: string; seat: string | null; baggageKg: number | null; checkedIn: boolean; status: string; boardingPass: string | null };
-type FlightOption = { id: string; code: string; origin: string; destination: string; date: string; departure: string; arrival: string; status: string };
+type FlightOption = { id: string; code?: string; origin: string; destination: string; date: string; departure: string; arrival: string; status: string };
 
-const flightLabel = (flight: FlightOption) => `${flight.code} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)} ${flight.departure}`;
+const flightLabel = (flight: FlightOption) => `${flight.code ?? flight.id} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)} ${flight.departure}`;
+const flightChoices = (flights: readonly FlightOption[], date: string) => flights
+  .filter((flight) => matchesDateRange(flight.date, date, date))
+  .map((flight) => ({ value: flight.id, label: flightLabel(flight) }));
 
 function Manifest() {
   const [flights, setFlights] = useState<FlightOption[] | null>(null);
   const [manifest, setManifest] = useState<ManifestRow[] | null>(null);
   const [error, setError] = useState("");
   const [selectedFlight, setSelectedFlight] = useState("");
+  const [date, setDate] = useState("");
   const [search, setSearch] = useState("");
   const [revision, setRevision] = useState(0);
 
@@ -412,25 +422,42 @@ function Manifest() {
         if (!response.ok) throw new Error(await response.json().then((b) => b.error ?? "No se pudo cargar el manifiesto."));
         const body = await response.json();
         setManifest((body.data ?? []) as ManifestRow[]);
+        setError("");
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
   }, [selectedFlight, revision]);
 
   const flight = flights?.find((f) => f.id === selectedFlight);
+  const choices = flightChoices(flights ?? [], date);
   const passengers = (manifest || []).filter((row) => row.flightId === selectedFlight);
-  const q = search.trim().toLowerCase();
-  const rows = passengers.filter((row) => row.passenger.toLowerCase().includes(q) || row.document.toLowerCase().includes(q) || row.reservationCode.toLowerCase().includes(q));
+  const rows = passengers.filter((row) => matchesFilter(search, row.passenger, row.document, row.reservationCode));
+
+  function selectFlight(value: string) {
+    if (value === selectedFlight) return;
+    setSelectedFlight(value);
+    setSearch("");
+    setManifest(null);
+  }
+
+  function changeDate(value: string) {
+    setDate(value);
+    selectFlight(keepVisibleSelection(selectedFlight, flightChoices(flights ?? [], value)));
+  }
 
   return <section className="panel">
     <div className="panel-title"><div><p className="kicker">MOSTRADOR / MANIFIESTO</p><h2>Manifiesto de pasajeros</h2></div>{selectedFlight && <button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button>}</div>
     {error && <p role="alert" className="error-text">{error}</p>}
     {!flights && !error && <p role="status">Cargando vuelos…</p>}
-    {flights && <div className="form-row" style={{ marginBottom: 16 }}>
-      <label>Vuelo<select value={selectedFlight} onChange={(event) => { setSelectedFlight(event.target.value); setSearch(""); setManifest(null); }}><option value="">Seleccioná un vuelo</option>{flights.map((f) => <option key={f.id} value={f.id}>{flightLabel(f)}</option>)}</select></label>
-      {selectedFlight && <label>Buscar por DNI, nombre o reserva<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="DNI, apellido o código de reserva…" /></label>}
-    </div>}
+    {flights && <FilterBar label="Filtros del manifiesto">
+      <FilterInput label="Fecha del vuelo" type="date" value={date} onChange={changeDate} />
+      <SearchSelect label="Vuelo" value={selectedFlight} onChange={selectFlight} disabled={choices.length === 0}
+        options={[{ value: "", label: "Seleccioná un vuelo" }, ...choices]} />
+      {selectedFlight && <FilterInput label="Buscar pasajero" value={search} onChange={setSearch} placeholder="DNI, nombre o código de reserva" />}
+      {(date || selectedFlight || search) && <button className="button small" type="button" onClick={() => { setDate(""); setSearch(""); selectFlight(""); }}>Limpiar</button>}
+    </FilterBar>}
     {flights?.length === 0 && <div className="empty-inline">No hay vuelos programados.</div>}
+    {flights && flights.length > 0 && choices.length === 0 && <div className="empty-inline">No hay vuelos para la fecha seleccionada.</div>}
     {flight && <p className="form-hint">{flightLabel(flight)} → {flight.arrival} · <Status value={flight.status} /> · {passengers.length} pasajero{passengers.length !== 1 ? "s" : ""} confirmado{passengers.length !== 1 ? "s" : ""}</p>}
     {selectedFlight && !manifest && !error && <p role="status">Cargando manifiesto…</p>}
     {selectedFlight && manifest && (passengers.length === 0
@@ -467,6 +494,9 @@ function BoardingPass() {
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  const [flightId, setFlightId] = useState("");
+  const [date, setDate] = useState("");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -493,12 +523,23 @@ function BoardingPass() {
   }, []);
 
   // Solo hay pase con check-in y asiento confirmado (criterio 3).
-  const passList = (passes ?? []).filter((p) => p.checkedIn && p.boardingPass && p.seat);
+  const passList = readyBoardingPasses(passes ?? []);
   const passKey = (row: ManifestRow) => row.id ?? row.boardingPass ?? `${row.reservationCode}-${row.document}`;
-  const selected = passList.find((row) => passKey(row) === selectedId);
+  const flightById = new Map((flights ?? []).map((flight) => [flight.id, flight]));
+  function choicesForDate(value: string) {
+    return uniqueOptions(passList.map((row) => row.flightId)).flatMap((option) => {
+      const flight = flightById.get(option.value);
+      if (!matchesDateRange(flight?.date, value, value)) return [];
+      return [{ ...option, label: flight ? flightLabel(flight) : option.label }];
+    });
+  }
+  const visiblePasses = passList.filter((row) => (!flightId || row.flightId === flightId)
+    && matchesDateRange(flightById.get(row.flightId)?.date, date, date)
+    && matchesFilter(search, row.passenger, row.document, row.reservationCode, row.boardingPass));
+  const selected = visiblePasses.find((row) => passKey(row) === selectedId);
 
   if (selected) {
-    const flight = flights?.find((f) => f.id === selected.flightId);
+    const flight = flightById.get(selected.flightId);
     const payload = boardingPassPayload({ code: selected.boardingPass ?? "", reservationCode: selected.reservationCode, flightCode: flight?.code ?? selected.flightId, date: flight?.date ?? "", seat: selected.seat ?? "" });
     return (
       <section className="panel" style={{ maxWidth: "700px", margin: "0 auto" }}>
@@ -558,19 +599,31 @@ function BoardingPass() {
   return (
     <section className="panel">
       <div className="panel-title"><div><p className="kicker">MOSTRADOR / BOARDING PASS</p><h2>Pases de embarque</h2></div><button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button></div>
+      <FilterBar label="Filtros de pases de embarque">
+        <FilterInput label="Fecha del vuelo" type="date" value={date} onChange={(value) => {
+          setDate(value);
+          setFlightId(keepVisibleSelection(flightId, choicesForDate(value)));
+          setSelectedId(null);
+        }} />
+        <SearchSelect label="Vuelo" value={flightId} onChange={(value) => { setFlightId(value); setSelectedId(null); }}
+          options={[{ value: "", label: "Todos los vuelos" }, ...choicesForDate(date)]} />
+        <FilterInput label="Buscar pasajero o pase" value={search} onChange={(value) => { setSearch(value); setSelectedId(null); }} placeholder="Nombre, DNI, reserva o pase" />
+        {(date || flightId || search) && <button className="button small" type="button" onClick={() => { setDate(""); setFlightId(""); setSearch(""); setSelectedId(null); }}>Limpiar</button>}
+      </FilterBar>
       {passList.length === 0 ? (
         <div className="empty-inline">No hay pases de embarque generados. Los pases se crean tras el check-in con asiento asignado.</div>
-      ) : (
+      ) : visiblePasses.length === 0 ? <p className="empty-inline">No hay pases que coincidan con los filtros.</p> : (
         <div className="record-grid">
-          {passList.map((row) => {
-            const flight = flights?.find((f) => f.id === row.flightId);
+          {visiblePasses.map((row) => {
+            const flight = flightById.get(row.flightId);
             return (
-              <article className="record-card" key={passKey(row)} style={{ cursor: "pointer" }} onClick={() => setSelectedId(passKey(row))}>
+              <article className="record-card" key={passKey(row)}>
                 <strong>{row.reservationCode}</strong>
                 <p>{row.passenger}</p>
-                <p>Vuelo: {flight ? `${flight.code} · ${flight.origin} → ${flight.destination} · ${displayDate(flight.date)}` : row.flightId}</p>
+                <p>Vuelo: {flight ? flightLabel(flight) : row.flightId}</p>
                 <p>Asiento: {row.seat}</p>
                 <p>Pase: {row.boardingPass}</p>
+                <button className="button small" type="button" onClick={() => setSelectedId(passKey(row))}>Ver pase</button>
               </article>
             );
           })}
@@ -668,6 +721,7 @@ function Disruptions() {
   const [message, setMessage] = useState<Notice>(null);
   const [query, setQuery] = useState("");
   const [date, setDate] = useState("");
+  const [status, setStatus] = useState("");
   const [rescheduling, setRescheduling] = useState<string | null>(null);
   const [pending, setPending] = useState<FlightChange | null>(null);
   const [busy, setBusy] = useState(false);
@@ -709,9 +763,9 @@ function Disruptions() {
     setRescheduling(null);
   }
 
-  const q = query.trim().toLowerCase();
-  const matches = (rows ?? []).filter((row) => (!date || row.date === date)
-    && (!q || [row.code, row.flightId, row.origin, row.destination].some((value) => value?.toLowerCase().includes(q))));
+  const matches = (rows ?? []).filter((row) => matchesDateRange(row.date, date, date)
+    && (!status || row.status === status)
+    && matchesFilter(query, row.code, row.flightId, row.origin, row.destination));
   const visible = matches.slice(0, disruptionLimit);
 
   return (
@@ -719,12 +773,15 @@ function Disruptions() {
       <div className="panel-title"><div><p className="kicker">GESTIÓN DE ESTADOS</p><h2>Cambiar estado de vuelo</h2></div><button className="button small" type="button" onClick={() => void setRevision((v) => v + 1)}>Actualizar</button></div>
       {error && <p role="alert" className="error-text">{error}</p>}
       {!rows && !error && <p role="status">Cargando contingencias…</p>}
-      {rows && <div className="form-row" style={{ marginBottom: 16 }}>
-        <label>Buscar vuelo<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Código, origen o destino" /></label>
-        <label>Fecha<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-      </div>}
+      {rows && <FilterBar label="Filtros de contingencias">
+        <FilterInput label="Buscar vuelo" value={query} onChange={setQuery} placeholder="Código, origen o destino" />
+        <FilterInput label="Fecha del vuelo" type="date" value={date} onChange={setDate} />
+        <SearchSelect label="Estado" value={status} onChange={setStatus}
+          options={[{ value: "", label: "Todos los estados" }, ...uniqueOptions(rows.map((row) => row.status))]} />
+        {(query || date || status) && <button className="button small" type="button" onClick={() => { setQuery(""); setDate(""); setStatus(""); }}>Limpiar</button>}
+      </FilterBar>}
       <ActionNotice notice={message} />
-      {rows && matches.length === 0 && <div className="empty-inline">No hay vuelos que coincidan con la búsqueda.</div>}
+      {rows && matches.length === 0 && <div className="empty-inline">No hay vuelos que coincidan con los filtros.</div>}
       {matches.length > visible.length && <p className="form-hint">Mostrando {visible.length} de {matches.length} vuelos. Filtrá por código o fecha para encontrar el que buscás.</p>}
       {visible.length > 0 && (
         <div className="record-grid">
@@ -870,14 +927,28 @@ type InventoryRow = { flightId: string; date: string; capacityEconomy: number; c
 function InventorySummary() {
   const { data, error, refresh } = useMock<InventoryRow[]>("inventory");
   const [flightId, setFlightId] = useState("");
-  const selected = (data ?? []).filter((row) => !flightId || row.flightId === flightId).slice(0, 60);
+  const [date, setDate] = useState("");
+  function choicesForDate(value: string) {
+    return (data ?? []).filter((row) => matchesDateRange(row.date, value, value))
+      .map((row) => ({ value: row.flightId, label: `${row.flightId} · ${displayDate(row.date)}` }));
+  }
+  const matches = (data ?? []).filter((row) => (!flightId || row.flightId === flightId) && matchesDateRange(row.date, date, date));
+  const selected = matches.slice(0, 60);
   return <section className="panel inventory-summary" aria-label="Cupos vendidos por vuelo y clase">
     <div className="panel-title"><h2>Cupos vendidos y asientos asignados</h2><button className="button small" type="button" onClick={refresh}>Actualizar</button></div>
     <p className="form-hint">Una venta ocupa cupo comercial. El asiento físico se asigna al hacer check-in; no son el mismo contador.</p>
-    <label>Vuelo<select value={flightId} onChange={(event) => setFlightId(event.target.value)}><option value="">Todos los vuelos</option>{data?.map((row) => <option key={row.flightId} value={row.flightId}>{row.flightId} · {displayDate(row.date)}</option>)}</select></label>
+    {data && <FilterBar label="Filtros de inventario">
+      <FilterInput label="Fecha del vuelo" type="date" value={date} onChange={(value) => {
+        setDate(value);
+        setFlightId(keepVisibleSelection(flightId, choicesForDate(value)));
+      }} />
+      <SearchSelect label="Vuelo" value={flightId} onChange={setFlightId}
+        options={[{ value: "", label: "Todos los vuelos" }, ...choicesForDate(date)]} />
+      {(date || flightId) && <button className="button small" type="button" onClick={() => { setDate(""); setFlightId(""); }}>Limpiar</button>}
+    </FilterBar>}
     {error && <p role="alert" className="error-text">{error}</p>}
     {!data && !error && <p role="status">Cargando inventario…</p>}
-    {data && selected.length === 0 && <p className="empty-inline">No hay vuelos para mostrar.</p>}
+    {data && selected.length === 0 && <p className="empty-inline">{data.length ? "No hay vuelos que coincidan con los filtros." : "No hay vuelos para mostrar."}</p>}
     {selected.map((row) => <div key={row.flightId} className="inventory-flight">
       <h3>{row.flightId} · {displayDate(row.date)}</h3>
       <div className="inventory-table-scroll" tabIndex={0} aria-label={`Inventario del vuelo ${row.flightId}`}>
@@ -888,16 +959,40 @@ function InventorySummary() {
         </table>
       </div>
     </div>)}
-    {!flightId && (data?.length ?? 0) > 60 && <p className="form-hint">Seleccioná un vuelo para consultar el resto de los resultados.</p>}
+    {matches.length > selected.length && <p className="form-hint">Seleccioná un vuelo para consultar el resto de los resultados.</p>}
   </section>;
 }
 
 function ResourceManager({ resource, live }: { resource: EditableResource; live: boolean }) {
   const { data, error, refresh } = useMock<EditableRow[]>(resource === "airports" && live ? "airports?includeArchived=1" : resource);
+  const usesFlightFilters = resource === "capacities" || resource === "fares";
+  const { data: flights, error: flightError } = useMock<FlightOption[]>(usesFlightFilters ? "flights" : null);
   const [message, setMessage] = useState<Notice>(null);
   const [editing, setEditing] = useState<EditableRow | null>(null);
   const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
+  const [attribute, setAttribute] = useState("");
+  const [flightId, setFlightId] = useState("");
+  const [date, setDate] = useState("");
   const title: Record<EditableResource, string> = { airports: "Aeropuertos", capacities: "Capacidades", fares: "Tarifas", users: "Usuarios y roles", notifications: "Notificaciones" };
+  const flightById = new Map((flights ?? []).map((flight) => [flight.id, flight]));
+  const airportStatus = (row: EditableRow) => row.archived_at ? "Archivado" : "Activo";
+  const roleLabels: Record<string, string> = { pasajero: "Pasajero", mostrador: "Mostrador", admin: "Administrador" };
+  const rowRole = (row: EditableRow) => String(row.role ?? "").toLowerCase();
+  function choicesForDate(value: string) {
+    return uniqueOptions((data ?? []).map((row) => row.flightId)).flatMap((option) => {
+      const flight = flightById.get(option.value);
+      if (!matchesDateRange(flight?.date, value, value)) return [];
+      return [{ ...option, label: flight ? flightLabel(flight) : option.label }];
+    });
+  }
+  const visible = data?.filter((row) => {
+    if (usesFlightFilters) return (!flightId || row.flightId === flightId)
+      && matchesDateRange(flightById.get(String(row.flightId))?.date, date, date);
+    if (resource === "airports") return (!attribute || airportStatus(row) === attribute) && matchesFilter(query, row.code, row.city, row.name);
+    if (resource === "users") return (!attribute || rowRole(row) === attribute) && matchesFilter(query, row.name, row.email);
+    return true;
+  });
   async function send(method: "POST" | "PATCH" | "DELETE", payload: Record<string, unknown>) {
     setMessage(null);
     const result = await mutate(resource, method, payload);
@@ -921,10 +1016,29 @@ function ResourceManager({ resource, live }: { resource: EditableResource; live:
     if (resource === "users") return <label>Rol<select name="role" defaultValue={String(editing?.role ?? "pasajero")}><option value="pasajero">Pasajero</option><option value="mostrador">Mostrador</option><option value="admin">Administrador</option></select></label>;
     return null;
   }
-  if (!live) return <GenericCollection resource={resource} live={false} />;
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">GESTIÓN EN SUPABASE</p><h2>{title[resource]}</h2></div>{resource === "airports" && <button type="button" className="button dark" onClick={() => { setEditing(null); setCreating(true); }}>+ Aeropuerto</button>}</div>
+  if (!live && resource === "notifications") return <GenericCollection resource={resource} live={false} />;
+  return <section className="panel"><div className="panel-title"><div><p className="kicker">{live ? "GESTIÓN EN SUPABASE" : "DATOS DE DEMOSTRACIÓN"}</p><h2>{title[resource]}</h2></div>{live && resource === "airports" && <button type="button" className="button dark" onClick={() => { setEditing(null); setCreating(true); }}>+ Aeropuerto</button>}</div>
+    {data && resource !== "notifications" && <FilterBar label={ `Filtros de ${title[resource].toLowerCase()}` }>
+      {usesFlightFilters ? <>
+        {flights && <FilterInput label="Fecha del vuelo" type="date" value={date} onChange={(value) => {
+          setDate(value);
+          setFlightId(keepVisibleSelection(flightId, choicesForDate(value)));
+        }} />}
+        <SearchSelect label="Vuelo" value={flightId} onChange={setFlightId}
+          options={[{ value: "", label: "Todos los vuelos" }, ...choicesForDate(date)]} />
+      </> : <>
+        <FilterInput label={resource === "airports" ? "Buscar aeropuerto" : "Buscar usuario"} value={query} onChange={setQuery}
+          placeholder={resource === "airports" ? "Código IATA, ciudad o nombre" : "Nombre o correo"} />
+        <SearchSelect label={resource === "airports" ? "Estado" : "Rol"} value={attribute} onChange={setAttribute}
+          options={resource === "airports" ? [{ value: "", label: "Todos los estados" }, ...uniqueOptions(data.map(airportStatus))]
+            : [{ value: "", label: "Todos los roles" }, ...uniqueOptions(data.map(rowRole)).map((option) => ({ ...option, label: roleLabels[option.value] ?? option.label }))]} />
+      </>}
+      {(query || attribute || flightId || date) && <button className="button small" type="button" onClick={() => { setQuery(""); setAttribute(""); setFlightId(""); setDate(""); }}>Limpiar</button>}
+    </FilterBar>}
+    {usesFlightFilters && flightError && <p className="form-hint">No se pudieron cargar las fechas de los vuelos. Podés buscar por código.</p>}
     {error && <p role="alert" className="error-text">{error}</p>}{!data && !error && <p role="status">Cargando…</p>}
-    <div className="record-grid">{data?.map((row, index) => <article className="record-card" key={String(row.id ?? row.code ?? row.flightId ?? index)}><strong>{String(row.flightId ?? row.code ?? row.name ?? row.title ?? "Registro")}</strong>{Object.entries(row).filter(([key]) => !["id", "flightId", "code", "name"].includes(key)).slice(0, 5).map(([key, value]) => <p key={key}>{key}: {String(value ?? "—")}</p>)}<div className="action-row">{resource === "notifications" ? row.status === "Nueva" && <button type="button" className="button small" onClick={() => void send("PATCH", { id: row.id })}>Marcar leída</button> : <><button type="button" className="button small" onClick={() => { setCreating(false); setEditing(row); }}>Editar</button>{resource === "airports" && <button type="button" className="button small" onClick={() => void send(row.archived_at ? "PATCH" : "DELETE", row.archived_at ? { code: row.code, restore: true } : { code: row.code })}>{row.archived_at ? "Restaurar" : "Archivar"}</button>}</>}</div></article>)}</div>
+    {data && visible?.length === 0 && <p className="empty-inline">{data.length ? "No hay registros que coincidan con los filtros." : "Todavía no hay registros."}</p>}
+    <div className="record-grid">{visible?.map((row, index) => <article className="record-card" key={String(row.id ?? row.code ?? row.flightId ?? index)}><strong>{String(row.flightId ?? row.code ?? row.name ?? row.title ?? "Registro")}</strong>{Object.entries(row).filter(([key]) => !["id", "flightId", "code", "name"].includes(key)).slice(0, 5).map(([key, value]) => <p key={key}>{key}: {String(value ?? "—")}</p>)}{live && <div className="action-row">{resource === "notifications" ? row.status === "Nueva" && <button type="button" className="button small" onClick={() => void send("PATCH", { id: row.id })}>Marcar leída</button> : <><button type="button" className="button small" onClick={() => { setCreating(false); setEditing(row); }}>Editar</button>{resource === "airports" && <button type="button" className="button small" onClick={() => void send(row.archived_at ? "PATCH" : "DELETE", row.archived_at ? { code: row.code, restore: true } : { code: row.code })}>{row.archived_at ? "Restaurar" : "Archivar"}</button>}</>}</div>}</article>)}</div>
     {(editing || creating) && <form className="stack-form inline-form" onSubmit={save} key={`${resource}-${String(editing?.id ?? editing?.code ?? editing?.flightId ?? "new")}`}><h3>{creating ? "Nuevo aeropuerto" : `Editar ${String(editing?.flightId ?? editing?.code ?? editing?.name ?? "registro")}`}</h3>{fields()}<div className="action-row"><button className="button dark" type="submit">Guardar</button><button className="button" type="button" onClick={() => { setEditing(null); setCreating(false); }}>Cerrar</button></div></form>}
     <ActionNotice notice={message} />
   </section>;
@@ -1000,8 +1114,33 @@ function Profile({ live }: { live: boolean }) {
 function GenericCollection({ resource, live }: { resource: string; live: boolean }) {
   const { data, error } = useMock<unknown>(resource);
   const records = data === null ? [] : Array.isArray(data) ? data : [data];
+  const isAudit = resource === "flight-logs";
+  const [query, setQuery] = useState("");
+  const [flight, setFlight] = useState("");
+  const [field, setField] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const invalidDates = Boolean(from && to && from > to);
+  const visible = isAudit ? records.filter((row) => !invalidDates && (!flight || row.flightId === flight) && (!field || row.field === field)
+    && matchesDateRange(auditCalendarDate(row.changedAt), from, to)
+    && matchesFilter(query, row.actor, row.oldValue, row.newValue)) : records;
   const labels: Record<string, string> = { code: "Código", flightId: "Vuelo", name: "Nombre", email: "Correo", phone: "Teléfono", role: "Rol", status: "Estado", economy: "Economy", first: "Primera", passenger: "Pasajero", document: "Documento", cabin: "Clase", seats: "Pasajes", checkedIn: "Check-in", reservationCode: "Reserva", seat: "Asiento", baggageKg: "Equipaje (kg)", gate: "Puerta", title: "Aviso", kind: "Tipo", changedAt: "Fecha y hora", actor: "Usuario", field: "Campo", oldValue: "Valor anterior", newValue: "Valor nuevo", affectedBookings: "Reservas afectadas", occupancy: "Ocupación", amount: "Monto", offline: "Disponible offline" };
-  return <section className="panel"><div className="panel-title"><div><p className="kicker">{live ? "DATOS DE SUPABASE" : "DATOS DE DEMOSTRACIÓN"}</p><h2>Vista general</h2></div><span className="subtle-count">API /api/data/{resource}</span></div>{error ? <p role="alert" className="error-text">{error}</p> : data === null ? <p role="status">Cargando datos…</p> : records.length === 0 ? <div className="empty-inline">Todavía no hay elementos para mostrar.</div> : <div className="record-grid">{records.map((record, index) => <div className="record-card" key={index}>{Object.entries(record as Record<string, unknown>).slice(0, 8).map(([key, value]) => <div key={key}><span>{labels[key] ?? key.replace(/([A-Z])/g, " $1")}</span><strong>{value === null || value === undefined || value === "" ? "—" : typeof value === "boolean" ? value ? "Sí" : "No" : key === "occupancy" ? `${value}%` : String(value)}</strong></div>)}</div>)}</div>}{!live && <p className="form-hint">Contenido ficticio para definir componentes, estados y contratos de API.</p>}</section>;
+  return <section className="panel">
+    <div className="panel-title"><div><p className="kicker">{live ? "DATOS DE SUPABASE" : "DATOS DE DEMOSTRACIÓN"}</p><h2>{isAudit ? "Historial de cambios" : "Vista general"}</h2></div>{!isAudit && <span className="subtle-count">API /api/data/{resource}</span>}</div>
+    {isAudit && data !== null && !error && <FilterBar label="Filtros de auditoría">
+      <SearchSelect label="Vuelo" value={flight} onChange={setFlight} options={[{ value: "", label: "Todos los vuelos" }, ...uniqueOptions(records.map((row) => row.flightId))]} />
+      <SearchSelect label="Campo modificado" value={field} onChange={setField} options={[{ value: "", label: "Todos los campos" }, ...uniqueOptions(records.map((row) => row.field))]} />
+      <FilterInput label="Desde" type="date" value={from} onChange={setFrom} />
+      <FilterInput label="Hasta" type="date" value={to} onChange={setTo} />
+      <FilterInput label="Buscar en el historial" value={query} onChange={setQuery} placeholder="Usuario o valor del cambio" />
+      {(query || flight || field || from || to) && <button className="button small" type="button" onClick={() => { setQuery(""); setFlight(""); setField(""); setFrom(""); setTo(""); }}>Limpiar</button>}
+    </FilterBar>}
+    {error ? <p role="alert" className="error-text">{error}</p> : data === null ? <p role="status">Cargando datos…</p>
+      : isAudit && invalidDates ? <p role="alert" className="error-text">La fecha desde no puede ser posterior a la fecha hasta.</p>
+      : visible.length === 0 ? <div className="empty-inline">{records.length ? "No hay cambios que coincidan con los filtros." : "Todavía no hay elementos para mostrar."}</div>
+      : <div className="record-grid">{visible.map((record, index) => <div className="record-card" key={index}>{Object.entries(record as Record<string, unknown>).slice(0, 8).map(([key, value]) => <div key={key}><span>{labels[key] ?? key.replace(/([A-Z])/g, " $1")}</span><strong>{value === null || value === undefined || value === "" ? "—" : typeof value === "boolean" ? value ? "Sí" : "No" : key === "occupancy" ? `${value}%` : String(value)}</strong></div>)}</div>)}</div>}
+    {!live && <p className="form-hint">Contenido ficticio para definir componentes, estados y contratos de API.</p>}
+  </section>;
 }
 
 type Ticket = { id: string; reservationCode: string; flightId: string; passenger: string; seat: string; status: string };
@@ -1040,9 +1179,9 @@ export function ModuleContent({ module, sprint, initialFlight, initialQuery, liv
   if (module.resource === "disruptions") return <Disruptions />;
   if (module.slug === "reportes") return <Reports live={live} />;
   if (module.role === "pasajero" && module.slug === "tickets" && live) return <Tickets />;
-  if (module.resource === "seats") return <><InventorySummary />{live ? <DomainManager resource="seats" canEdit={module.role === "admin"} /> : <GenericCollection resource="seats" live={false} />}</>;
+  if (module.resource === "seats") return <><InventorySummary /><DomainManager resource="seats" canEdit={live && module.role === "admin"} /></>;
   if (module.resource === "capacities") return <><InventorySummary /><ResourceManager resource="capacities" live={live} /></>;
-  if (live && ["aircraft", "schedules", "frequencies", "configurations"].includes(module.resource)) return <DomainManager resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations"} canEdit={module.role === "admin"} />;
-  if (["airports", "capacities", "fares", "users", "notifications"].includes(module.resource)) return <ResourceManager resource={module.resource as EditableResource} live={live} />;
-  return <GenericCollection resource={module.resource} live={live} />;
+  if (["aircraft", "schedules", "frequencies", "configurations"].includes(module.resource)) return <DomainManager key={module.resource} resource={module.resource as "aircraft" | "schedules" | "frequencies" | "configurations"} canEdit={live && module.role === "admin"} />;
+  if (["airports", "capacities", "fares", "users", "notifications"].includes(module.resource)) return <ResourceManager key={module.resource} resource={module.resource as EditableResource} live={live} />;
+  return <GenericCollection key={module.resource} resource={module.resource} live={live} />;
 }
