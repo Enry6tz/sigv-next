@@ -5,7 +5,7 @@ import { createClient } from "./server";
 import { ApiError, databaseError } from "@/lib/api-errors";
 import { validateFlightSchedule } from "@/lib/flight-schedule";
 import { displayFlightCode } from "@/lib/flight-code";
-import { adminFlightDto } from "@/lib/admin-flights";
+import { adminFlightDto, loadAdminFlightList } from "@/lib/admin-flights";
 import { documentProblem, emailProblem, normalizeDocument, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 import { mailConfigured, sendMail } from "@/lib/mail";
 import { changeReason, flightChangeMail, type FlightChangeMailEvent } from "@/lib/flight-change-mail";
@@ -140,7 +140,11 @@ export async function readResource(resource: string, filters: URLSearchParams) {
     const rows = unwrap(await client.from("flight_schedules")
       .select("*,aircraft(model),schedule_frequencies(weekday),schedule_configurations(cabin,capacity,price)")
       .is("archived_at", null).order("code"));
-    return rows.map((row: Json) => adminFlightDto(row));
+    return loadAdminFlightList(rows.map((row: Json) => adminFlightDto(row)), filters.get("includeStandalone") === "1",
+      async (offset, limit) => unwrap(await client.from("flights")
+        .select("id,origin,destination,flight_date,departure,arrival,status,economy,first,capacity_economy,capacity_first,baggage_included,seat_selection_enabled,online_check_in_enabled,scheduled_departure,taken_off_at,service_timezone")
+        .is("schedule_id", null).is("archived_at", null).order("id").range(offset, offset + limit - 1))
+        .map((row: Json) => ({ ...row, status: flightDto(row).status })));
   }
   if (resource === "airports") {
     let query = client.from("airports").select("*").order("code");

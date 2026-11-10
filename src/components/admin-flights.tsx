@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { filterAdminFlights, frequencyLabel, type AdminFlight } from "@/lib/admin-flights";
+import { uniqueOptions } from "@/lib/filter-options";
 import { mutate } from "@/lib/mutations";
 import { FlightCreateForm } from "./flight-create-form";
 import { ActionNotice, type Notice } from "./action-notice";
+import { FilterBar, FilterInput, SearchSelect } from "./workspace-filters";
 
 function FlightDialog({ children, label, busy, onClose }: { children: ReactNode; label: string; busy: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -31,12 +34,19 @@ function RowIcon({ action }: { action: "edit" | "fares" | "delete" }) {
 
 const shortDate = (value: string) => value.split("-").reverse().map((part, index) => index === 2 ? part.slice(-2) : part).join("/");
 const pageSize = 7;
+const emptyFilter = { code: "", origin: "", destination: "", date: "", kind: "" };
+const allAirports = { value: "", label: "Todos" };
+const flightKinds = [
+  { value: "", label: "Todos" },
+  { value: "schedule", label: "Programaciones" },
+  { value: "standalone", label: "Vuelos individuales" },
+];
 
 export function AdminFlights({ live }: { live: boolean }) {
   const [rows, setRows] = useState<AdminFlight[] | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
-  const [filter, setFilter] = useState({ code: "", origin: "", destination: "" });
+  const [filter, setFilter] = useState(emptyFilter);
   const [page, setPage] = useState(1);
   const [dialog, setDialog] = useState<{ action: "create" | "edit" | "fares" | "delete"; flight?: AdminFlight } | null>(null);
   const [message, setMessage] = useState<Notice>(null);
@@ -46,7 +56,7 @@ export function AdminFlights({ live }: { live: boolean }) {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/data/admin-flights", { cache: "no-store" }).then(async (response) => {
+    fetch("/api/data/admin-flights?includeStandalone=1", { cache: "no-store" }).then(async (response) => {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "No se pudo cargar el listado de vuelos.");
       if (active) { setRows(body.data); setError(""); }
@@ -54,7 +64,8 @@ export function AdminFlights({ live }: { live: boolean }) {
     return () => { active = false; };
   }, [revision]);
 
-  const filtered = filterAdminFlights(rows ?? [], filter.code, filter.origin, filter.destination);
+  const filtered = filterAdminFlights(rows ?? [], filter.code, filter.origin, filter.destination, filter);
+  const standaloneCount = rows?.filter((row) => row.kind === "standalone").length ?? 0;
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -96,27 +107,40 @@ export function AdminFlights({ live }: { live: boolean }) {
   }
 
   return <section className="admin-flight-list" aria-label="Listado de vuelos">
-    <div className="admin-flight-toolbar"><label className="admin-flight-search"><span className="sr-only">Buscar código de vuelo</span><input value={filter.code} onChange={(event) => changeFilter("code", event.target.value)} placeholder="Buscar código de vuelo…" /></label>
-      {(["origin", "destination"] as const).map((key) => <label className="admin-flight-filter" key={key}>{key === "origin" ? "Origen" : "Destino"}<select value={filter[key]} onChange={(event) => changeFilter(key, event.target.value)}><option value="">Todos</option>{Array.from(new Set((rows ?? []).map((row) => row[key]))).sort().map((code) => <option key={code}>{code}</option>)}</select></label>)}
-      <span className="admin-flight-count">{rows?.length ?? 0} vuelos registrados · {rows?.filter((row) => row.status === "Activa").length ?? 0} activos</span>
+    <div className="admin-flight-toolbar">
+      <span className="admin-flight-count">{rows ? `${rows.length - standaloneCount} programaciones · ${standaloneCount} vuelos individuales` : "Listado de vuelos"}</span>
+      <button className="button" type="button" disabled={busy} onClick={() => setRevision((value) => value + 1)}>Actualizar</button>
       <button className="button dark" disabled={busy} onClick={() => open("create")}>+ Crear Nuevo Vuelo</button>
+      <FilterBar label="Filtros del listado de vuelos">
+        <FilterInput label="Buscar código de vuelo" value={filter.code} onChange={(value) => changeFilter("code", value)} placeholder="Ej. AR-9519" />
+        {(["origin", "destination"] as const).map((key) => <SearchSelect key={key}
+          label={key === "origin" ? "Origen" : "Destino"} value={filter[key]} onChange={(value) => changeFilter(key, value)}
+          options={[allAirports, ...uniqueOptions((rows ?? []).map((row) => row[key]))]} />)}
+        <SearchSelect label="Tipo" value={filter.kind} options={flightKinds} onChange={(value) => changeFilter("kind", value)} />
+        <FilterInput label="Fecha de vuelo" type="date" value={filter.date} onChange={(value) => changeFilter("date", value)} />
+        <button className="button" type="button" onClick={() => { setFilter(emptyFilter); setPage(1); }}>Limpiar filtros</button>
+      </FilterBar>
     </div>
     <div className="admin-flight-results">
       <ActionNotice notice={message} />{deleted && <button className="button small" disabled={busy} onClick={restore}>Deshacer eliminación de {deleted.code}</button>}
       {error ? <div role="alert" className="error-text"><p>{error}</p><button className="button" onClick={() => setRevision((value) => value + 1)}>Reintentar</button></div> : !rows ? <p role="status">Cargando vuelos…</p> : <>
         <div className="admin-flight-table-wrap" tabIndex={0} role="region" aria-label="Tabla de vuelos, desplazamiento horizontal disponible"><table className="admin-flight-table"><thead><tr>
-          <th scope="col">Código vuelo</th><th scope="col">Origen → Destino</th><th scope="col">Aeronave</th><th scope="col">Frecuencia</th><th scope="col">Período venta</th><th scope="col">Estado</th><th scope="col">Acciones</th>
-        </tr></thead><tbody>{visible.map((flight) => <tr key={flight.id}>
+          <th scope="col">Código vuelo</th><th scope="col">Origen → Destino</th><th scope="col">Aeronave</th><th scope="col">Frecuencia</th><th scope="col">Fecha o período</th><th scope="col">Estado</th><th scope="col">Acciones</th>
+        </tr></thead><tbody>{visible.map((flight) => <tr key={`${flight.kind ?? "schedule"}-${flight.id}`}>
           <td><strong>{flight.code}</strong></td><td>{flight.origin} → {flight.destination}</td><td>{flight.aircraftModel ?? "Sin asignar"}</td>
-          <td>{frequencyLabel(flight.weekdays)}</td><td>{shortDate(flight.saleStart)} — {shortDate(flight.saleEnd)}</td>
-          <td><span className={`admin-flight-status${flight.status === "Activa" ? " active" : ""}`}><span aria-hidden="true">●</span>{flight.status === "Activa" ? "Activo" : "Inactivo"}</span></td>
-          <td><div className="admin-flight-actions">{(["edit", "fares", "delete"] as const).map((action) => {
+          <td>{flight.kind === "standalone" ? "Vuelo individual" : frequencyLabel(flight.weekdays)}</td>
+          <td>{flight.kind === "standalone" ? `${shortDate(flight.saleStart)} · ${flight.departure}` : `${shortDate(flight.saleStart)} — ${shortDate(flight.saleEnd)}`}</td>
+          <td><span className={`admin-flight-status${flight.status === "Activa" ? " active" : ""}`}><span aria-hidden="true">●</span>{flight.operationalStatus ?? (flight.status === "Activa" ? "Activo" : "Inactivo")}</span></td>
+          <td>{flight.kind === "standalone" ? <Link className="inline-action" href="/admin/contingencias" aria-label={`Contingencias del vuelo ${flight.code}`}>Contingencias</Link>
+            : <div className="admin-flight-actions">{(["edit", "fares", "delete"] as const).map((action) => {
             const label = `${action === "edit" ? "Editar" : action === "fares" ? "Tarifas de" : "Eliminar"} vuelo ${flight.code}`;
             return <button key={action} type="button" disabled={busy} aria-label={label} title={label} onClick={() => open(action, flight)}><RowIcon action={action} /></button>;
-          })}</div></td>
+          })}</div>}</td>
         </tr>)}</tbody></table></div>
         {filtered.length === 0 && <p className="empty-inline">{rows.length ? "No hay vuelos que coincidan con los filtros." : "Todavía no hay vuelos registrados."}</p>}
-        <div className="admin-flight-pagination"><span>Mostrando {visible.length} de {filtered.length} registros</span><nav aria-label="Páginas del listado de vuelos">
+        <div className="admin-flight-pagination"><span aria-live="polite">{visible.length
+          ? `Mostrando ${(currentPage - 1) * pageSize + 1}–${(currentPage - 1) * pageSize + visible.length} de ${filtered.length} registros`
+          : "Sin registros para mostrar"}</span><nav aria-label="Páginas del listado de vuelos">
           <button aria-label="Página anterior" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>‹</button>
           {Array.from({ length: pages }, (_, index) => index + 1).filter((value) => Math.abs(value - currentPage) <= 2).map((value) => <button key={value} aria-label={`Página ${value}`} aria-current={value === currentPage ? "page" : undefined} onClick={() => setPage(value)}>{value}</button>)}
           <button aria-label="Página siguiente" disabled={currentPage === pages} onClick={() => setPage(currentPage + 1)}>›</button>

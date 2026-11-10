@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminFlightDto, filterAdminFlights, frequencyLabel } from "../src/lib/admin-flights.ts";
+import { adminFlightDto, filterAdminFlights, frequencyLabel, loadAdminFlightList } from "../src/lib/admin-flights.ts";
 
 test("frecuencias en orden semanal, diario y días hábiles", () => {
   assert.equal(frequencyLabel([5, 1, 3]), "Lun, Mié, Vie");
@@ -37,4 +37,26 @@ test("vuelos migrados sin aeronave no inventan una asignación", () => {
   const row = adminFlightDto({ id: "legacy", code: "AR-2231", aircraft_id: null, aircraft: null });
   assert.equal(row.aircraftId, null);
   assert.equal(row.aircraftModel, null);
+});
+
+test("individual flights join the admin list only when requested and remain distinguishable from schedules", async () => {
+  const schedule = adminFlightDto({ id: "schedule", code: "AR-123", origin: "AEP", destination: "COR",
+    sale_start: "2026-11-01", sale_end: "2026-11-30", status: "Activa" });
+  const standalone = { id: "AR-9519", origin: "BRC", destination: "AEP", flight_date: "2026-11-19",
+    departure: "09:20:00", arrival: "11:35:00", status: "Retrasado", capacity_economy: 60, capacity_first: 6 };
+  const requests = [];
+  const readPage = async (from, limit) => {
+    requests.push([from, limit]);
+    return from === 0 ? [standalone] : [];
+  };
+  assert.deepEqual(await loadAdminFlightList([schedule], false, readPage), [schedule]);
+  assert.deepEqual(requests, []);
+  const rows = await loadAdminFlightList([schedule], true, readPage, 1);
+  assert.deepEqual(requests, [[0, 1], [1, 1]]);
+  assert.deepEqual(rows.map(({ id, kind, operationalStatus }) => [id, kind, operationalStatus]), [
+    ["schedule", undefined, undefined], ["AR-9519", "standalone", "Retrasado"],
+  ]);
+  assert.deepEqual(filterAdminFlights(rows, "", "", "", { kind: "standalone", date: "2026-11-19" }), [rows[1]]);
+  assert.deepEqual(filterAdminFlights(rows, "", "", "", { date: "2026-11-20" }), [schedule]);
+  assert.deepEqual(filterAdminFlights(rows, "9519", "BRC", "AEP"), [rows[1]]);
 });
