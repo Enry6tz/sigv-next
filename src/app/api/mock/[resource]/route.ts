@@ -6,7 +6,7 @@ import { appSprint, dataProvider } from "@/lib/sprint";
 import { ApiError, readResource, writeResource } from "@/lib/supabase/resources";
 import { publicError } from "@/lib/api-errors";
 import { countDepartures, validateFlightSchedule, type Aircraft } from "@/lib/flight-schedule";
-import { adminFlightDto } from "@/lib/admin-flights";
+import { adminFlightDto, standaloneFlightDto } from "@/lib/admin-flights";
 import { cabinAvailable, validReturnFlight, type Cabin } from "@/lib/passenger-search";
 import { documentProblem, emailProblem, normalizeEmail, normalizePhone, phoneProblem } from "@/lib/identity-validation";
 import { simulatedPaymentResult, PAYMENT_DECLINED_MESSAGE } from "@/lib/payment-simulation";
@@ -53,7 +53,11 @@ export async function GET(request: NextRequest, context: Context) {
     scheduledDeparture: flight.scheduledDeparture ?? flight.departure, kind: flight.status === "Retrasado" ? "Retraso" : "Sin contingencia",
     affectedBookings: flight.id === reservation.flightId ? 1 : 0, status: flight.status }));
   if (resource === "flight-mail") return NextResponse.json({ mode: "mock", resource, data: { configured: false, items: [], attempts: [] } }, { headers: { "Cache-Control": "no-store" } });
-  if (resource === "admin-flights") data = flights.map((flight) => adminFlightDto({
+  if (resource === "admin-flights") data = flights.map((flight, index) => request.nextUrl.searchParams.get("includeStandalone") === "1" && index === flights.length - 1
+    ? standaloneFlightDto({ id: flight.id, origin: flight.origin, destination: flight.destination, flight_date: flight.date,
+      departure: flight.departure, arrival: flight.arrival, status: flight.status, economy: flight.economy, first: flight.first,
+      capacity_economy: flight.seatsEconomy, capacity_first: flight.seatsFirst })
+    : adminFlightDto({
     id: flight.id, code: flight.id, origin: flight.origin, destination: flight.destination,
     aircraft_id: null, aircraft: null, departure: flight.departure, arrival: flight.arrival,
     sale_start: flight.date, sale_end: flight.date, status: flight.status === "Cancelado" ? "Suspendida" : "Activa",

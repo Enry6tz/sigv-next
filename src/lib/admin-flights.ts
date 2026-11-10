@@ -5,6 +5,8 @@ export type AdminFlight = {
   weekdays: number[]; status: "Activa" | "Suspendida";
   economy: number; first: number; seatsEconomy: number; seatsFirst: number;
   baggageIncluded: boolean; seatSelectionEnabled: boolean; onlineCheckInEnabled: boolean;
+  kind?: "standalone";
+  operationalStatus?: string;
 };
 
 export const operationDays = [
@@ -19,9 +21,14 @@ export function frequencyLabel(days: number[]) {
   return operationDays.filter(({ day }) => unique.has(day)).map(({ label }) => label).join(", ") || "Sin frecuencia";
 }
 
-export function filterAdminFlights(rows: AdminFlight[], code: string, origin: string, destination: string) {
+export function filterAdminFlights(rows: AdminFlight[], code: string, origin: string, destination: string,
+  filters: { kind?: string; date?: string } = {}) {
+  const weekday = filters.date ? new Date(`${filters.date}T12:00:00Z`).getUTCDay() : null;
   return rows.filter((row) => row.code.toLowerCase().includes(code.trim().toLowerCase())
-    && (!origin || row.origin === origin) && (!destination || row.destination === destination));
+    && (!origin || row.origin === origin) && (!destination || row.destination === destination)
+    && (!filters.kind || (row.kind ?? "schedule") === filters.kind)
+    && (!filters.date || (row.saleStart <= filters.date && row.saleEnd >= filters.date
+      && (row.kind === "standalone" || !row.weekdays?.length || (weekday !== null && row.weekdays.includes(weekday))))));
 }
 
 type ScheduleRow = Record<string, unknown>;
@@ -41,4 +48,34 @@ export function adminFlightDto(row: ScheduleRow): AdminFlight {
     baggageIncluded: row.baggage_included === true, seatSelectionEnabled: row.seat_selection_enabled !== false,
     onlineCheckInEnabled: row.online_check_in_enabled !== false,
   };
+}
+
+export function standaloneFlightDto(row: ScheduleRow): AdminFlight {
+  const day = String(row.flight_date);
+  const status = String(row.status);
+  return {
+    id: String(row.id), code: String(row.id), origin: String(row.origin), destination: String(row.destination),
+    aircraftId: null, aircraftModel: null, departure: String(row.departure).slice(0, 5), arrival: String(row.arrival).slice(0, 5),
+    saleStart: day, saleEnd: day, weekdays: [], status: ["Activo", "Retrasado"].includes(status) ? "Activa" : "Suspendida",
+    economy: Number(row.economy ?? 0), first: Number(row.first ?? 0),
+    seatsEconomy: Number(row.capacity_economy ?? 0), seatsFirst: Number(row.capacity_first ?? 0),
+    baggageIncluded: row.baggage_included === true, seatSelectionEnabled: row.seat_selection_enabled !== false,
+    onlineCheckInEnabled: row.online_check_in_enabled !== false, kind: "standalone", operationalStatus: status,
+  };
+}
+
+export async function loadAdminFlightList(
+  schedules: AdminFlight[],
+  includeStandalone: boolean,
+  readStandalonePage: (offset: number, limit: number) => Promise<ScheduleRow[]>,
+  pageSize = 500,
+) {
+  if (!includeStandalone) return schedules;
+  const rows = [...schedules];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await readStandalonePage(offset, pageSize);
+    rows.push(...page.map(standaloneFlightDto));
+    if (page.length < pageSize) break;
+  }
+  return rows.sort((a, b) => a.code.localeCompare(b.code, "es", { numeric: true }) || a.id.localeCompare(b.id));
 }
